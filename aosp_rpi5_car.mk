@@ -15,6 +15,13 @@ PRODUCT_CHARACTERISTICS := automotive,nosdcard
 $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
 $(call inherit-product, packages/services/Car/car_product/build/car.mk)
 
+# Audio
+PRODUCT_PACKAGES += \
+    android.hardware.automotive.audiocontrol-service.example
+
+PRODUCT_COPY_FILES += \
+    $(DEVICE_CAR_PATH)/car_audio_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/car_audio_configuration.xml
+
 # Bluetooth
 PRODUCT_VENDOR_PROPERTIES += \
     bluetooth.device.class_of_device=38,4,8 \
