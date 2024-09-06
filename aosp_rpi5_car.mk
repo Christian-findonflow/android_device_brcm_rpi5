@@ -54,6 +54,15 @@ PRODUCT_COPY_FILES += \
 # Camera
 ENABLE_CAMERA_SERVICE := true
 
+# CAN
+PRODUCT_PACKAGES += \
+    android.hardware.automotive.can-service
+
+PRODUCT_PACKAGES += \
+    canhalctrl \
+    canhaldump \
+    canhalsend
+
 # EVS
 ENABLE_CAREVSSERVICE_SAMPLE := true
 ENABLE_EVS_SAMPLE := true
