@@ -63,6 +63,12 @@ ENABLE_REAR_VIEW_CAMERA_SAMPLE := true
 PRODUCT_COPY_FILES += \
     $(DEVICE_CAR_PATH)/evs_config_override.json:${TARGET_COPY_OUT_VENDOR}/etc/automotive/evs/config_override.json
 
+# Occupant awareness
+PRODUCT_PACKAGES += \
+    android.hardware.automotive.occupant_awareness@1.0-service
+
+include packages/services/Car/car_product/occupant_awareness/OccupantAwareness.mk
+
 # Overlays
 PRODUCT_PACKAGES += \
     AndroidRpiOverlay \
