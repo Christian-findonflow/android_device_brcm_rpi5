@@ -7,6 +7,8 @@
 # Inherit device configuration
 $(call inherit-product, device/brcm/rpi5/device.mk)
 
+DEVICE_CAR_PATH := device/brcm/rpi5/car
+
 PRODUCT_AAPT_CONFIG := normal mdpi hdpi
 PRODUCT_AAPT_PREF_CONFIG := hdpi
 PRODUCT_CHARACTERISTICS := automotive,nosdcard
@@ -52,7 +54,7 @@ ENABLE_EVS_SERVICE := true
 ENABLE_REAR_VIEW_CAMERA_SAMPLE := true
 
 PRODUCT_COPY_FILES += \
-    device/brcm/rpi5/camera/evs_config_override.json:${TARGET_COPY_OUT_VENDOR}/etc/automotive/evs/config_override.json
+    $(DEVICE_CAR_PATH)/evs_config_override.json:${TARGET_COPY_OUT_VENDOR}/etc/automotive/evs/config_override.json
 
 # Overlays
 PRODUCT_PACKAGES += \
