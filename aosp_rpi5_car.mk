@@ -63,6 +63,10 @@ PRODUCT_PACKAGES += \
     canhaldump \
     canhalsend
 
+# Display
+PRODUCT_COPY_FILES += \
+    $(DEVICE_CAR_PATH)/display_settings.xml:$(TARGET_COPY_OUT_VENDOR)/etc/display_settings.xml
+
 # EVS
 ENABLE_CAREVSSERVICE_SAMPLE := true
 ENABLE_EVS_SAMPLE := true
