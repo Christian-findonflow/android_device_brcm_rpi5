@@ -176,6 +176,7 @@ PRODUCT_PACKAGES += \
     hwcomposer.drm
 
 PRODUCT_PACKAGES += \
+    dri_gbm \
     libEGL_mesa \
     libGLESv1_CM_mesa \
     libGLESv2_mesa \
