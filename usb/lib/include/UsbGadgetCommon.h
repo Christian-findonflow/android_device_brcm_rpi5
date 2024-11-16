@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2020 The Android Open Source Project
+ * Copyright (C) 2024 KonstaKANG
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,8 +22,8 @@
 #include <android-base/properties.h>
 #include <android-base/unique_fd.h>
 
-#include <android/hardware/usb/gadget/1.2/IUsbGadget.h>
-#include <android/hardware/usb/gadget/1.2/types.h>
+#include <aidl/android/hardware/usb/gadget/IUsbGadget.h>
+#include <aidl/android/hardware/usb/gadget/GadgetFunction.h>
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -41,6 +42,7 @@
 #include <string>
 #include <thread>
 
+namespace aidl {
 namespace android {
 namespace hardware {
 namespace usb {
@@ -79,8 +81,8 @@ using ::android::base::GetProperty;
 using ::android::base::SetProperty;
 using ::android::base::unique_fd;
 using ::android::base::WriteStringToFile;
-using ::android::hardware::usb::gadget::V1_0::Status;
-using ::android::hardware::usb::gadget::V1_2::GadgetFunction;
+using ::aidl::android::hardware::usb::gadget::GadgetFunction;
+using ::aidl::android::hardware::usb::gadget::Status;
 
 using ::std::lock_guard;
 using ::std::move;
@@ -176,4 +178,5 @@ Status resetGadget();
 }  // namespace usb
 }  // namespace hardware
 }  // namespace android
+}  // namespace aidl
 #endif

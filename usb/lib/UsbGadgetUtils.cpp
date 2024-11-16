@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2020 The Android Open Source Project
+ * Copyright (C) 2024 KonstaKANG
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +19,7 @@
 
 #include "include/UsbGadgetCommon.h"
 
+namespace aidl {
 namespace android {
 namespace hardware {
 namespace usb {
@@ -205,3 +207,4 @@ Status addAdb(MonitorFfs* monitorFfs, int* functionCount) {
 }  // namespace usb
 }  // namespace hardware
 }  // namespace android
+}  // namespace aidl
