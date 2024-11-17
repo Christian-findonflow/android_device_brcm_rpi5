@@ -86,14 +86,14 @@ struct alsa_stream_out {
 
 static int probe_pcm_out_card() {
     FILE *fp;
-    char card_node[] = "/proc/asound/card0/id";
+    char card_node[32];
     char card_id[16];
 
     char card_prop[PROPERTY_VALUE_MAX];
     property_get("persist.audio.device", card_prop, "");
 
     for (int i = 0; i < 5; i++) {
-        card_node[17] = i + '0';
+        snprintf(card_node, sizeof(card_node), "/proc/asound/card%d/id", i);
         if ((fp = fopen(card_node, "r")) != NULL) {
             fgets(card_id, sizeof(card_id), fp);
             ALOGV("%s: %s", card_node, card_id);
@@ -346,17 +346,17 @@ static int out_get_presentation_position(const struct audio_stream_out *stream,
     struct alsa_stream_out *out = (struct alsa_stream_out *)stream;
     int ret = -1;
 
-        if (out->pcm) {
-            unsigned int avail;
-            if (pcm_get_htimestamp(out->pcm, &avail, timestamp) == 0) {
-                size_t kernel_buffer_size = out->config.period_size * out->config.period_count;
-                int64_t signed_frames = out->written - kernel_buffer_size + avail;
-                if (signed_frames >= 0) {
-                    *frames = signed_frames;
-                    ret = 0;
-                }
+    if (out->pcm) {
+        unsigned int avail;
+        if (pcm_get_htimestamp(out->pcm, &avail, timestamp) == 0) {
+            size_t kernel_buffer_size = out->config.period_size * out->config.period_count;
+            int64_t signed_frames = out->written - kernel_buffer_size + avail;
+            if (signed_frames >= 0) {
+                *frames = signed_frames;
+                ret = 0;
             }
         }
+    }
 
     return ret;
 }
