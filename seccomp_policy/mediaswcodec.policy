@@ -1,4 +1,3 @@
 # device specific syscalls
-mkdirat: 1
 sched_getaffinity: 1
 sysinfo: 1
