@@ -17,8 +17,5 @@
 /dev/media2                                                                  0660   media      media
 /dev/video19                                                                 0660   media      media
 
-# ION
-/dev/ion                                                                     0664   system     system
-
 # USB
 /sys/class/udc/1000480000.usb  current_speed                                 0664   system     system
