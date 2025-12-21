@@ -1,11 +1,20 @@
+# Early splash screen (shows before kernel loads)
+disable_splash=1
+splash=splash.png
+
+# Boot optimization
+boot_delay=0
+initial_turbo=60
+force_turbo=1
+
 # Kernel
 kernel=Image
 
 # Ramdisk
 initramfs ramdisk.img followkernel
 
-# Camera
-camera_auto_detect=1
+# Camera - disabled for faster boot (enable if needed)
+#camera_auto_detect=1
 
 # Display
 disable_overscan=1
@@ -26,7 +35,14 @@ dtoverlay=cma,cma-320
 #dtparam=i2s=on
 
 # SPI
-#dtparam=spi=on
+dtparam=spi=on
+
+# PCIe / NVMe (Pi 5)
+dtparam=pciex1=on
+dtoverlay=pciex1-compat-pi5
+
+# Seeed CAN-FD HAT v2
+dtoverlay=seeed-can-fd-hat-v2
 
 # USB
 dtoverlay=dwc2,dr_mode=peripheral

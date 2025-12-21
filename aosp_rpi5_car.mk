@@ -60,12 +60,17 @@ ENABLE_CAMERA_SERVICE := true
 
 # CAN
 PRODUCT_PACKAGES += \
-    android.hardware.automotive.can-service
+    android.hardware.automotive.can-service \
+    canhalconfigurator-aidl
 
 PRODUCT_PACKAGES += \
     canhalctrl \
     canhaldump \
     canhalsend
+
+PRODUCT_COPY_FILES += \
+    $(DEVICE_PATH)/can/canbus_config.pb:$(TARGET_COPY_OUT_SYSTEM)/etc/canbus_config.pb \
+    $(DEVICE_PATH)/can/canhalconfigurator.rc:$(TARGET_COPY_OUT_SYSTEM)/etc/init/canhalconfigurator-rpi.rc
 
 # Display
 PRODUCT_COPY_FILES += \
@@ -97,6 +102,10 @@ PRODUCT_PACKAGES += \
 
 include packages/services/Car/car_product/occupant_awareness/OccupantAwareness.mk
 
+# MotoDash
+PRODUCT_PACKAGES += \
+    MotoDash
+
 # Overlays
 PRODUCT_PACKAGES += \
     AndroidRpiOverlay \
@@ -110,9 +119,9 @@ PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.software.activities_on_secondary_displays.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.software.activities_on_secondary_displays.xml \
     frameworks/native/data/etc/car_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/car_core_hardware.xml
 
-# Vehicle
+# Vehicle - Custom motorcycle HAL that reads from CAN bus
 PRODUCT_PACKAGES += \
-    android.hardware.automotive.vehicle@V4-default-service
+    android.hardware.automotive.vehicle@V4-motorcycle-service
 
 # Device identifier. This must come after all inclusions.
 PRODUCT_DEVICE := rpi5

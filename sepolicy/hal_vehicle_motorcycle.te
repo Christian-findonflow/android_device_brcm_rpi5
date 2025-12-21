@@ -1,0 +1,5 @@
+# SELinux policy for Motorcycle Vehicle HAL service
+# Extends hal_can_socketcan to also serve as Vehicle HAL
+
+# Allow hal_can_socketcan to also serve Vehicle HAL
+hal_server_domain(hal_can_socketcan, hal_vehicle)

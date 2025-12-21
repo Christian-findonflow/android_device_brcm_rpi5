@@ -193,5 +193,20 @@ PRODUCT_PACKAGES += \
 PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.wifi.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.wifi.xml
 
+# ADB over WiFi (for userdebug builds)
+PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
+    service.adb.tcp.port=5555
+
 # Window extensions
 $(call inherit-product, $(SRC_TARGET_DIR)/product/window_extensions.mk)
+
+# Custom boot animation
+PRODUCT_COPY_FILES += \
+    $(DEVICE_PATH)/bootanimation/bootanimation.zip:$(TARGET_COPY_OUT_SYSTEM)/media/bootanimation.zip
+
+# Dalvik/ART optimization for faster boot
+# Use verify on first boot to avoid long dex2oat compilation
+PRODUCT_PROPERTY_OVERRIDES += \
+    pm.dexopt.first-boot=verify \
+    pm.dexopt.boot-after-ota=verify \
+    pm.dexopt.install=speed-profile

@@ -1,0 +1,53 @@
+/*
+ * Copyright (C) 2024 MotoDash Project
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_library_static {
+    name: "MotorcycleVehicleHardware",
+    vendor: true,
+    defaults: [
+        "VehicleHalDefaults",
+    ],
+    local_include_dirs: ["."],
+    export_include_dirs: ["."],
+    srcs: ["MotorcycleVehicleHardware.cpp"],
+    header_libs: [
+        "IVehicleHardware",
+    ],
+    static_libs: [
+        "VehicleHalUtils",
+    ],
+    shared_libs: [
+        "libbinder_ndk",
+    ],
+}
+
+cc_binary {
+    name: "android.hardware.automotive.vehicle@V4-motorcycle-service",
+    vendor: true,
+    defaults: [
+        "VehicleHalDefaults",
+        "android-automotive-large-parcelable-defaults",
+    ],
+    vintf_fragments: ["vhal-motorcycle-service.xml"],
+    init_rc: ["vhal-motorcycle-service.rc"],
+    relative_install_path: "hw",
+    srcs: ["VehicleService.cpp"],
+    local_include_dirs: ["."],
+    static_libs: [
+        "DefaultVehicleHal",
+        "MotorcycleVehicleHardware",
+        "VehicleHalUtils",
+    ],
+    header_libs: [
+        "IVehicleHardware",
+    ],
+    shared_libs: [
+        "libbinder_ndk",
+    ],
+}

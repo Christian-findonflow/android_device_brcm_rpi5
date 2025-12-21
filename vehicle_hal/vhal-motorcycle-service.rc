@@ -1,0 +1,9 @@
+service vendor.vehicle-hal-motorcycle /vendor/bin/hw/android.hardware.automotive.vehicle@V4-motorcycle-service
+    class early_hal
+    user vehicle_network
+    group system inet
+    capabilities NET_ADMIN NET_RAW
+
+# Restart Vehicle HAL after boot completes to ensure CAN interfaces are ready
+on property:sys.boot_completed=1
+    restart vendor.vehicle-hal-motorcycle

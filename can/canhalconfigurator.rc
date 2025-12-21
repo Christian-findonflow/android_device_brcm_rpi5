@@ -1,0 +1,13 @@
+# CAN HAL Configurator for RPi5 with Seeed CAN-FD HAT v2
+# Brings up can0 and can1 at boot via AIDL CAN HAL
+
+service canhalconfigurator-rpi /system_ext/bin/canhalconfigurator-aidl /system/etc/canbus_config.pb
+    class main
+    user root
+    group root system inet
+    oneshot
+    disabled
+
+# Start after CAN HAL service is running
+on property:init.svc.android.hardware.automotive.can=running
+    start canhalconfigurator-rpi

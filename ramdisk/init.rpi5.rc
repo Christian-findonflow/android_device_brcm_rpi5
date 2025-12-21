@@ -8,3 +8,16 @@ on fs
 
 on late-fs
     mount_all /vendor/etc/fstab.rpi5 --late
+
+# CAN bus initialization - bring up interfaces early
+on post-fs-data
+    exec_background u:r:shell:s0 -- /system/bin/ip link set can0 type can bitrate 250000
+    exec_background u:r:shell:s0 -- /system/bin/ip link set can0 up
+    exec_background u:r:shell:s0 -- /system/bin/ip link set can1 type can bitrate 250000
+    exec_background u:r:shell:s0 -- /system/bin/ip link set can1 up
+
+# Start MotoDash as home after boot completes
+# Use a small delay to ensure system is fully ready, then start with HOME category
+on property:sys.boot_completed=1
+    exec_background u:r:shell:s0 -- /system/bin/sleep 2
+    exec_background u:r:shell:s0 -- /system/bin/am start -W -c android.intent.category.HOME -a android.intent.action.MAIN -n com.moto.dash/.DashActivity

@@ -70,3 +70,11 @@ wifi.interface=wlan0
 
 # Window extensions
 persist.settings.large_screen_opt.enabled=true
+
+# Boot optimization
+ro.config.low_ram=false
+config.disable_consumerir=true
+ro.setupwizard.mode=DISABLED
+ro.config.skip_first_use_hints=true
+persist.sys.disable_rescue=true
+ro.sys.sdcardfs=false
