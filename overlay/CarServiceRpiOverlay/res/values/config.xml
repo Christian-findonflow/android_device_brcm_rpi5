@@ -59,8 +59,8 @@
          Setting this string to empty will disable the feature. -->
     <string name="config_userNoticeUiService" translatable="false"></string>
 
-    <!-- Default home activity - MotoDash dashboard -->
-    <string name="defaultHomeActivity" translatable="false">com.moto.dash/com.moto.dash.DashActivity</string>
+    <!-- Default home activity - CarLauncher with integrated motorcycle dashboard -->
+    <string name="defaultHomeActivity" translatable="false">com.android.car.carlauncher/com.android.car.carlauncher.CarLauncher</string>
 
     <!-- A name of a camera device that provides the rearview through EVS service -->
     <string name="config_evsRearviewCameraId" translatable="false">/dev/video0</string>
