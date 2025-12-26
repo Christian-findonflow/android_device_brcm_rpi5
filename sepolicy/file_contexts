@@ -27,3 +27,10 @@
 /vendor/bin/hw/android\.hardware\.tv\.hdmi\.connection-service\.rpi          u:object_r:hal_tv_hdmi_connection_default_exec:s0
 /vendor/bin/hw/android\.hardware\.automotive\.vehicle@V4-motorcycle-service  u:object_r:hal_can_socketcan_exec:s0
 /dev/block/sda7       u:object_r:metadata_block_device:s0
+
+# GPIO devices for turn signals and high beam
+/dev/gpiochip[0-9]*   u:object_r:gpio_device:s0
+
+# GNSS HAL binary
+/vendor/bin/hw/android\.hardware\.gnss-service\.rpi5   u:object_r:hal_gnss_rpi5_exec:s0
+

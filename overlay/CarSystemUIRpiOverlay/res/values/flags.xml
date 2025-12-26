@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Disable the scalableUI feature - it interferes with TaskView embedding -->
+    <bool name="scalable_ui">false</bool>
+    <bool name="scalable_ui_enable_task_focus">false</bool>
+    <bool name="scalable_ui_design_compose">false</bool>
+    <bool name="scalable_ui_task_auto_restart">false</bool>
+    <bool name="scalable_ui_actions">false</bool>
+    <bool name="scalable_ui_task_focus">false</bool>
+</resources>

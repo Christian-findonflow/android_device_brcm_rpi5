@@ -19,3 +19,11 @@
 
 # USB
 /sys/class/udc/1000480000.usb  current_speed                                 0664   system     system
+
+# GPIO for Vehicle HAL (turn signals, high beam)
+/dev/gpiochip*                                                               0666   system     system
+
+# GPS/GNSS USB devices (U-blox, etc)
+/dev/ttyACM*                                                                 0660   gps        gps
+/dev/ttyUSB*                                                                 0660   gps        gps
+/dev/gnss*                                                                   0660   gps        gps

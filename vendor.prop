@@ -49,7 +49,7 @@ persist.vendor.ffmpeg_codec2.v4l2.h265=true
 # Graphics
 vendor.hwc.drm.ctm=DRM_OR_IGNORE
 vendor.hwc.drm.disable_hdr=1
-vendor.hwc.drm.force_mode=1920x1080
+vendor.hwc.drm.force_mode=800x480
 
 # Lockscreen
 ro.lockscreen.disable.default=true
@@ -70,6 +70,9 @@ wifi.interface=wlan0
 
 # Window extensions
 persist.settings.large_screen_opt.enabled=true
+
+# GPS/GNSS
+vendor.ser.gnss-uart=/dev/ttyACM0
 
 # Boot optimization
 ro.config.low_ram=false

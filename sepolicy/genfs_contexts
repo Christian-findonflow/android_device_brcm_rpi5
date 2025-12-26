@@ -20,3 +20,6 @@ genfscon sysfs /firmware/devicetree/base/serial-number  u:object_r:sysfs_dt_firm
 # Suspend
 genfscon sysfs /devices/platform/soc/soc:rpi_rtc/rtc/rtc0/alarmtimer.0.auto/wakeup/wakeup1  u:object_r:sysfs_wakeup:s0
 genfscon sysfs /devices/platform/soc/soc:rpi_rtc/wakeup/wakeup0                             u:object_r:sysfs_wakeup:s0
+
+# GPIO sysfs interface for turn signals and high beam
+genfscon sysfs /class/gpio  u:object_r:sysfs_gpio:s0

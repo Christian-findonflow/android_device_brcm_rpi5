@@ -20,6 +20,7 @@
 
 #include <linux/can.h>
 #include <linux/can/raw.h>
+#include <linux/gpio.h>
 
 namespace android::hardware::automotive::vehicle::motorcycle {
 
@@ -48,6 +49,12 @@ constexpr uint32_t CAN_ID_BMS = 0x6B1;                      // Battery SoC, Temp
 constexpr int32_t VENDOR_BATTERY_VOLTAGE = 0x21600001;     // Battery voltage in volts
 constexpr int32_t VENDOR_BATTERY_CURRENT = 0x21600002;     // Battery current in amps
 constexpr int32_t VENDOR_THROTTLE_POSITION = 0x21600003;   // Throttle position 0-100% (as float)
+
+// GPIO configuration (BCM pin numbers, -1 = disabled)
+constexpr int GPIO_PIN_LEFT_TURN = -1;   // Will be read from system property
+constexpr int GPIO_PIN_RIGHT_TURN = -1;
+constexpr int GPIO_PIN_HIGH_BEAM = -1;
+constexpr bool GPIO_ACTIVE_LOW = true;   // Optoisolator pulls low when active
 
 // Gear values from controller
 constexpr int GEAR_PARK = 0;
@@ -90,6 +97,13 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void processControllerTemps(const uint8_t* data);
     void processBmsData(const uint8_t* data);
     
+    // GPIO functions
+    void loadGpioConfig();
+    bool openGpioChip();
+    void gpioReaderThread();
+    void updateTurnSignalState(int state);
+    void updateHighBeamState(bool on);
+    
     void notifyPropertyChange(int32_t propId, const VehiclePropValue& value);
     float calculateSpeedFromRpm(int rpm) const;
     int mapGearToVehicleGear(int controllerGear) const;
@@ -104,6 +118,14 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int mCanSocket = -1;
     std::atomic<bool> mRunning{false};
     std::thread mCanReaderThread;
+    
+    // GPIO state
+    int mGpioChipFd = -1;
+    int mGpioLeftTurnPin = -1;
+    int mGpioRightTurnPin = -1;
+    int mGpioHighBeamPin = -1;
+    bool mGpioActiveLow = true;
+    std::thread mGpioReaderThread;
 
     // Vehicle parameters for speed calculation
     static constexpr float WHEEL_CIRCUMFERENCE_M = 1.894f;  // meters

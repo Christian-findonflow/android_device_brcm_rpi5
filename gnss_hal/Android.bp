@@ -1,0 +1,41 @@
+// GNSS HAL for Raspberry Pi 5 with USB GPS (U-blox, etc)
+// Parses NMEA sentences directly from serial port
+
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_binary {
+    name: "android.hardware.gnss-service.rpi5",
+    relative_install_path: "hw",
+    vendor: true,
+    init_rc: ["gnss-rpi5.rc"],
+    vintf_fragments: ["gnss-rpi5.xml"],
+    cflags: [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    shared_libs: [
+        "libbase",
+        "libcutils",
+        "libbinder_ndk",
+        "libutils",
+        "liblog",
+        "android.hardware.gnss-V4-ndk",
+    ],
+    srcs: [
+        "Gnss.cpp",
+        "GnssConfiguration.cpp",
+        "NmeaParser.cpp",
+        "SerialPort.cpp",
+        "service.cpp",
+    ],
+}
+
+prebuilt_etc {
+    name: "android.hardware.location.gps.rpi5.xml",
+    src: "android.hardware.location.gps.xml",
+    sub_dir: "permissions",
+    vendor: true,
+}

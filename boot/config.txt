@@ -20,12 +20,14 @@ initramfs ramdisk.img followkernel
 disable_overscan=1
 
 # Display panel
-#dtoverlay=vc4-kms-dsi-7inch
+dtoverlay=vc4-kms-dsi-7inch
 #dtoverlay=vc4-kms-dsi-ili9881-5inch
 #dtoverlay=vc4-kms-dsi-ili9881-7inch
+#dtoverlay=vc4-kms-dsi-generic
+dtparam=drm_fb0_rp1_dsi1=on
 
 # Graphics acceleration
-dtoverlay=vc4-kms-v3d
+#dtoverlay=vc4-kms-v3d
 dtoverlay=cma,cma-320
 
 # I2C
@@ -49,3 +51,4 @@ dtoverlay=dwc2,dr_mode=peripheral
 [cm5]
 dtoverlay=dwc2,dr_mode=otg
 [all]
+dtoverlay=vc4-kms-v3d-pi5

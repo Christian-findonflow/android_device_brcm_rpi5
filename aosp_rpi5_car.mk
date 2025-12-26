@@ -106,11 +106,16 @@ include packages/services/Car/car_product/occupant_awareness/OccupantAwareness.m
 PRODUCT_PACKAGES += \
     MotoDash
 
+# OsmAnd Navigation
+PRODUCT_PACKAGES += \
+    OsmAnd
+
 # Overlays
 PRODUCT_PACKAGES += \
     AndroidRpiOverlay \
     BluetoothRpiOverlay \
     CarServiceRpiOverlay \
+    CarSystemUIRpiOverlay \
     SettingsProviderRpiOverlay \
     WifiRpiOverlay
 
@@ -122,6 +127,16 @@ PRODUCT_COPY_FILES += \
 # Vehicle - Custom motorcycle HAL that reads from CAN bus
 PRODUCT_PACKAGES += \
     android.hardware.automotive.vehicle@V4-motorcycle-service
+
+# Default GPIO pin configuration for turn signals and high beam
+# BCM pin numbers: left=16 (physical 36), right=20 (physical 38), high_beam=21 (physical 40)
+PRODUCT_VENDOR_PROPERTIES += \
+    persist.vendor.motodash.gpio.left_turn=16 \
+    persist.vendor.motodash.gpio.right_turn=20 \
+    persist.vendor.motodash.gpio.high_beam=21 \
+    persist.vendor.motodash.gpio.active_low=true \
+    persist.sys.enable_freeform_support=1 \
+    persist.sys.force_resizable_activities=1
 
 # Device identifier. This must come after all inclusions.
 PRODUCT_DEVICE := rpi5

@@ -20,7 +20,7 @@ BOARD_HAVE_BLUETOOTH := true
 TARGET_NO_BOOTLOADER := true
 
 # Display
-TARGET_SCREEN_DENSITY := 240
+TARGET_SCREEN_DENSITY := 160
 
 # Kernel
 BOARD_CUSTOM_BOOTIMG := true
@@ -29,7 +29,7 @@ BOARD_CUSTOM_BOOTIMG_MK := $(DEVICE_PATH)/mkbootimg.mk
 # quiet: reduce kernel log output
 # loglevel=3: only show errors
 # logo.nologo: skip raspberry logo
-BOARD_KERNEL_CMDLINE := console=ttyAMA10,115200 no_console_suspend root=/dev/ram0 rootwait androidboot.hardware=rpi5 quiet loglevel=3 logo.nologo
+BOARD_KERNEL_CMDLINE := console=ttyAMA10,115200 no_console_suspend root=/dev/ram0 rootwait androidboot.hardware=rpi5 quiet loglevel=3 logo.nologo video=DSI-1:800x480M@60 video=DSI-2:800x480M@60
 
 # Manifest
 DEVICE_FRAMEWORK_COMPATIBILITY_MATRIX_FILE := $(DEVICE_PATH)/framework_compatibility_matrix.xml

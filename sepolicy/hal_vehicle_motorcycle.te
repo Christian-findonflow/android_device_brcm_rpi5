@@ -3,3 +3,14 @@
 
 # Allow hal_can_socketcan to also serve Vehicle HAL
 hal_server_domain(hal_can_socketcan, hal_vehicle)
+
+# GPIO access for turn signals and high beam indicators
+# Allow access to GPIO character devices
+allow hal_can_socketcan gpio_device:chr_file rw_file_perms;
+
+# Allow access to sysfs GPIO interface
+allow hal_can_socketcan sysfs_gpio:dir r_dir_perms;
+allow hal_can_socketcan sysfs_gpio:file rw_file_perms;
+
+# Allow reading vendor properties for GPIO configuration
+get_prop(hal_can_socketcan, vendor_default_prop)

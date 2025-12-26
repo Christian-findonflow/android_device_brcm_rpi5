@@ -101,6 +101,11 @@ PRODUCT_COPY_FILES += \
 PRODUCT_PACKAGES += \
     com.android.hardware.gatekeeper.nonsecure
 
+# GNSS/GPS (custom HAL for USB GPS devices like U-blox)
+PRODUCT_PACKAGES += \
+    android.hardware.gnss-service.rpi5 \
+    android.hardware.location.gps.rpi5.xml
+
 # Graphics
 PRODUCT_PACKAGES += \
     com.android.hardware.egl.mesa \

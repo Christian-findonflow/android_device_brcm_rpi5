@@ -1,0 +1,28 @@
+# SELinux policy for Raspberry Pi 5 GNSS HAL
+# Allows access to USB serial GPS devices (U-blox, etc)
+
+# Define the domain type
+type hal_gnss_rpi5, domain;
+type hal_gnss_rpi5_exec, exec_type, vendor_file_type, file_type;
+
+# HAL server domain for GNSS
+hal_server_domain(hal_gnss_rpi5, hal_gnss)
+
+# Allow init to start the service
+init_daemon_domain(hal_gnss_rpi5)
+
+# Allow access to USB serial devices (ttyACM*, ttyUSB*)
+allow hal_gnss_rpi5 usb_serial_device:chr_file rw_file_perms;
+
+# Allow reading vendor properties for GPS device configuration
+get_prop(hal_gnss_rpi5, vendor_default_prop)
+
+# Allow binder communication
+binder_use(hal_gnss_rpi5)
+binder_call(hal_gnss_rpi5, system_server)
+
+# Allow logging
+allow hal_gnss_rpi5 vendor_file:file r_file_perms;
+
+# Allow access to /dev for device enumeration
+allow hal_gnss_rpi5 device:dir r_dir_perms;

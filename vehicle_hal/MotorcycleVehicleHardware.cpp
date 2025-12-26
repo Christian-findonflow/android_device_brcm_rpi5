@@ -14,9 +14,15 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <cstring>
 #include <chrono>
 #include <thread>
+#include <fstream>
+#include <sstream>
+
+#include <cutils/properties.h>
 
 namespace android::hardware::automotive::vehicle::motorcycle {
 
@@ -26,6 +32,10 @@ using ::aidl::android::hardware::automotive::vehicle::VehicleUnit;
 
 MotorcycleVehicleHardware::MotorcycleVehicleHardware() {
     LOG(INFO) << "MotorcycleVehicleHardware initializing...";
+    
+    // Load GPIO configuration from system properties
+    loadGpioConfig();
+    
     initPropertyConfigs();
     
     // Start CAN initialization in a separate thread to allow retries
@@ -33,6 +43,12 @@ MotorcycleVehicleHardware::MotorcycleVehicleHardware() {
     mRunning = true;
     mCanReaderThread = std::thread(&MotorcycleVehicleHardware::canReaderThread, this);
     LOG(INFO) << "CAN reader thread started (will retry connection)";
+    
+    // Start GPIO reader thread if any GPIO pins are configured
+    if (mGpioLeftTurnPin >= 0 || mGpioRightTurnPin >= 0 || mGpioHighBeamPin >= 0) {
+        mGpioReaderThread = std::thread(&MotorcycleVehicleHardware::gpioReaderThread, this);
+        LOG(INFO) << "GPIO reader thread started";
+    }
 }
 
 MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
@@ -40,8 +56,14 @@ MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
     if (mCanReaderThread.joinable()) {
         mCanReaderThread.join();
     }
+    if (mGpioReaderThread.joinable()) {
+        mGpioReaderThread.join();
+    }
     if (mCanSocket >= 0) {
         close(mCanSocket);
+    }
+    if (mGpioChipFd >= 0) {
+        close(mGpioChipFd);
     }
 }
 
@@ -330,6 +352,45 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
         mCurrentValues[config.prop] = value;
     }
 
+    // TURN_SIGNAL_LIGHT_STATE - Turn signal indicator state (from GPIO)
+    // Using TURN_SIGNAL_LIGHT_STATE instead of deprecated TURN_SIGNAL_STATE
+    {
+        VehiclePropConfig config;
+        config.prop = static_cast<int32_t>(VehicleProperty::TURN_SIGNAL_LIGHT_STATE);
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::ON_CHANGE;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+        
+        VehiclePropValue value;
+        value.prop = config.prop;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.int32Values.push_back(0);  // VehicleTurnSignal::NONE
+        mCurrentValues[config.prop] = value;
+    }
+
+    // HIGH_BEAM_LIGHTS_STATE - High beam indicator state (from GPIO)
+    {
+        VehiclePropConfig config;
+        config.prop = static_cast<int32_t>(VehicleProperty::HIGH_BEAM_LIGHTS_STATE);
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::ON_CHANGE;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+        
+        VehiclePropValue value;
+        value.prop = config.prop;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.int32Values.push_back(0);  // VehicleLightState::OFF
+        mCurrentValues[config.prop] = value;
+    }
+
     LOG(INFO) << "Initialized " << mPropertyConfigs.size() << " property configs";
 }
 
@@ -609,7 +670,14 @@ void MotorcycleVehicleHardware::notifyPropertyChange(int32_t propId, const Vehic
                           << (value.value.floatValues.empty() ? 0 : value.value.floatValues[0]);
             }
         }
+        // Log turn signal and high beam notifications
+        if (propId == 289408560 || propId == 289410562) {  // TURN_SIGNAL_STATE or HIGH_BEAM_LIGHTS_STATE
+            LOG(INFO) << "Calling callback for propId=" << propId << " value=" 
+                      << (value.value.int32Values.empty() ? -1 : value.value.int32Values[0]);
+        }
         (*mOnPropertyChangeCallback)(values);
+    } else {
+        LOG(WARNING) << "No callback registered for propId=" << propId;
     }
 }
 
@@ -699,6 +767,206 @@ StatusCode MotorcycleVehicleHardware::subscribe(SubscribeOptions /*options*/) {
 
 StatusCode MotorcycleVehicleHardware::unsubscribe(int32_t /*propId*/, int32_t /*areaId*/) {
     return StatusCode::OK;
+}
+
+// ============================================================================
+// GPIO Implementation
+// ============================================================================
+
+void MotorcycleVehicleHardware::loadGpioConfig() {
+    // Read GPIO configuration from vendor properties
+    // These are set by the MotoDash app settings
+    char propValue[PROPERTY_VALUE_MAX];
+    
+    if (property_get("persist.vendor.motodash.gpio.left_turn", propValue, "-1") > 0) {
+        mGpioLeftTurnPin = atoi(propValue);
+    }
+    if (property_get("persist.vendor.motodash.gpio.right_turn", propValue, "-1") > 0) {
+        mGpioRightTurnPin = atoi(propValue);
+    }
+    if (property_get("persist.vendor.motodash.gpio.high_beam", propValue, "-1") > 0) {
+        mGpioHighBeamPin = atoi(propValue);
+    }
+    if (property_get("persist.vendor.motodash.gpio.active_low", propValue, "1") > 0) {
+        mGpioActiveLow = (atoi(propValue) != 0);
+    }
+    
+    LOG(INFO) << "GPIO config loaded: left=" << mGpioLeftTurnPin 
+              << " right=" << mGpioRightTurnPin 
+              << " highbeam=" << mGpioHighBeamPin
+              << " activeLow=" << mGpioActiveLow;
+}
+
+bool MotorcycleVehicleHardware::openGpioChip() {
+    // Open the GPIO character device for Raspberry Pi 5
+    // RPi5 uses gpiochip0 for the main GPIO header (BCM pins)
+    const char* gpioChips[] = {"/dev/gpiochip0", "/dev/gpiochip4"};
+    
+    for (const char* chipPath : gpioChips) {
+        mGpioChipFd = open(chipPath, O_RDWR);
+        if (mGpioChipFd >= 0) {
+            LOG(INFO) << "Opened GPIO chip: " << chipPath;
+            return true;
+        }
+        LOG(WARNING) << "Failed to open " << chipPath << ": " << strerror(errno);
+    }
+    
+    LOG(ERROR) << "Failed to open any GPIO chip";
+    return false;
+}
+
+void MotorcycleVehicleHardware::gpioReaderThread() {
+    LOG(INFO) << "GPIO reader thread starting with pins: left=" << mGpioLeftTurnPin 
+              << " right=" << mGpioRightTurnPin << " highbeam=" << mGpioHighBeamPin;
+    
+    // Wait for GPIO chip to be available
+    const int maxRetries = 30;
+    for (int retry = 0; retry < maxRetries && mRunning; retry++) {
+        if (openGpioChip()) {
+            break;
+        }
+        LOG(WARNING) << "GPIO chip not ready, retry " << (retry + 1) << "/" << maxRetries;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    
+    if (mGpioChipFd < 0) {
+        LOG(ERROR) << "Failed to open GPIO chip after retries";
+        return;
+    }
+    
+    // Use GPIO character device ioctl interface
+    // Request GPIO lines for input
+    auto requestGpioLine = [this](int pin) -> int {
+        if (pin < 0) return -1;
+        
+        struct gpio_v2_line_request req;
+        memset(&req, 0, sizeof(req));
+        req.offsets[0] = pin;
+        req.num_lines = 1;
+        req.config.flags = GPIO_V2_LINE_FLAG_INPUT;
+        strncpy(req.consumer, "motodash", sizeof(req.consumer) - 1);
+        
+        if (ioctl(mGpioChipFd, GPIO_V2_GET_LINE_IOCTL, &req) < 0) {
+            LOG(ERROR) << "Failed to request GPIO line " << pin << ": " << strerror(errno);
+            return -1;
+        }
+        LOG(INFO) << "Requested GPIO line " << pin << ", fd=" << req.fd;
+        return req.fd;
+    };
+    
+    auto readGpioLine = [](int lineFd) -> int {
+        if (lineFd < 0) return -1;
+        
+        struct gpio_v2_line_values vals;
+        memset(&vals, 0, sizeof(vals));
+        vals.mask = 1;
+        
+        if (ioctl(lineFd, GPIO_V2_LINE_GET_VALUES_IOCTL, &vals) < 0) {
+            return -1;
+        }
+        return (vals.bits & 1) ? 1 : 0;
+    };
+    
+    // Request lines for configured pins
+    int leftFd = requestGpioLine(mGpioLeftTurnPin);
+    int rightFd = requestGpioLine(mGpioRightTurnPin);
+    int highBeamFd = requestGpioLine(mGpioHighBeamPin);
+    
+    if (leftFd < 0 && rightFd < 0 && highBeamFd < 0) {
+        LOG(ERROR) << "Failed to request any GPIO lines";
+        return;
+    }
+    
+    LOG(INFO) << "GPIO reader thread running, polling pins...";
+    
+    int lastTurnState = -1;
+    int lastHighBeamState = -1;
+    
+    while (mRunning) {
+        // Read GPIO states
+        int leftRaw = readGpioLine(leftFd);
+        int rightRaw = readGpioLine(rightFd);
+        int highBeamRaw = readGpioLine(highBeamFd);
+        
+        // Apply active-low logic if needed
+        bool leftActive = (leftRaw >= 0) && (mGpioActiveLow ? (leftRaw == 0) : (leftRaw == 1));
+        bool rightActive = (rightRaw >= 0) && (mGpioActiveLow ? (rightRaw == 0) : (rightRaw == 1));
+        bool highBeamActive = (highBeamRaw >= 0) && (mGpioActiveLow ? (highBeamRaw == 0) : (highBeamRaw == 1));
+        
+        // Determine turn signal state
+        // VehicleTurnSignal: NONE=0, RIGHT=1, LEFT=2
+        int turnState = 0;
+        if (leftActive && rightActive) {
+            turnState = 2;  // Hazard - show LEFT
+        } else if (leftActive) {
+            turnState = 2;  // LEFT
+        } else if (rightActive) {
+            turnState = 1;  // RIGHT
+        }
+        
+        // Update turn signal if changed
+        if (turnState != lastTurnState) {
+            updateTurnSignalState(turnState);
+            lastTurnState = turnState;
+            LOG(INFO) << "Turn signal changed: left=" << leftActive << " right=" << rightActive << " state=" << turnState;
+        }
+        
+        // Update high beam if changed
+        int highBeamState = highBeamActive ? 1 : 0;
+        if (highBeamState != lastHighBeamState) {
+            updateHighBeamState(highBeamActive);
+            lastHighBeamState = highBeamState;
+            LOG(INFO) << "High beam changed: " << highBeamActive;
+        }
+        
+        // Poll at 20Hz (50ms)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    
+    // Cleanup
+    if (leftFd >= 0) close(leftFd);
+    if (rightFd >= 0) close(rightFd);
+    if (highBeamFd >= 0) close(highBeamFd);
+    
+    LOG(INFO) << "GPIO reader thread exiting";
+}
+
+void MotorcycleVehicleHardware::updateTurnSignalState(int state) {
+    int64_t timestamp = elapsedRealtimeNano();
+    
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto& value = mCurrentValues[static_cast<int32_t>(VehicleProperty::TURN_SIGNAL_LIGHT_STATE)];
+    if (value.value.int32Values.empty() || value.value.int32Values[0] != state) {
+        if (value.value.int32Values.empty()) {
+            value.value.int32Values.push_back(state);
+        } else {
+            value.value.int32Values[0] = state;
+        }
+        value.prop = static_cast<int32_t>(VehicleProperty::TURN_SIGNAL_LIGHT_STATE);
+        value.areaId = 0;
+        value.timestamp = timestamp;
+        LOG(INFO) << "Notifying TURN_SIGNAL_LIGHT_STATE change: " << state << " propId=" << value.prop;
+        notifyPropertyChange(static_cast<int32_t>(VehicleProperty::TURN_SIGNAL_LIGHT_STATE), value);
+    }
+}
+
+void MotorcycleVehicleHardware::updateHighBeamState(bool on) {
+    int64_t timestamp = elapsedRealtimeNano();
+    // VehicleLightState: OFF=0, ON=1, DAYTIME_RUNNING=2
+    int state = on ? 1 : 0;
+    
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto& value = mCurrentValues[static_cast<int32_t>(VehicleProperty::HIGH_BEAM_LIGHTS_STATE)];
+    if (value.value.int32Values.empty() || value.value.int32Values[0] != state) {
+        if (value.value.int32Values.empty()) {
+            value.value.int32Values.push_back(state);
+        } else {
+            value.value.int32Values[0] = state;
+        }
+        value.timestamp = timestamp;
+        LOG(INFO) << "Notifying HIGH_BEAM_LIGHTS_STATE change: " << state;
+        notifyPropertyChange(static_cast<int32_t>(VehicleProperty::HIGH_BEAM_LIGHTS_STATE), value);
+    }
 }
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle

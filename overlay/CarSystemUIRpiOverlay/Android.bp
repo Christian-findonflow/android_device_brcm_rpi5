@@ -1,0 +1,10 @@
+// Copyright (C) 2024
+//
+// SPDX-License-Identifier: Apache-2.0
+
+runtime_resource_overlay {
+    name: "CarSystemUIRpiOverlay",
+    resource_dirs: ["res"],
+    sdk_version: "current",
+    system_ext_specific: true,
+}
