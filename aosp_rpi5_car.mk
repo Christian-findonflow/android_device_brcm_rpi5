@@ -102,9 +102,9 @@ PRODUCT_PACKAGES += \
 
 include packages/services/Car/car_product/occupant_awareness/OccupantAwareness.mk
 
-# MotoDash
-PRODUCT_PACKAGES += \
-    MotoDash
+# MotoDash - DISABLED: Now using CarLauncher with integrated motorcycle dashboard
+# PRODUCT_PACKAGES += \
+#     MotoDash
 
 # OsmAnd Navigation
 PRODUCT_PACKAGES += \
