@@ -134,4 +134,6 @@
     <!-- Keep multi-window for TaskView embedding only -->
     <bool name="config_supportsMultiWindow">true</bool>
 
+    <string name="config_deviceSpecificDisplayAreaPolicyProvider" translatable="false">com.android.server.wm.CarDisplayAreaPolicyProvider</string>
+
 </resources>

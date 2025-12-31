@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compact dimensions for 800x480 motorcycle dashboard -->
+    <dimen name="resolver_list_item_height">48dp</dimen>
+    <dimen name="resolver_list_max_height">160dp</dimen>
+</resources>

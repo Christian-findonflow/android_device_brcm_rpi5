@@ -114,8 +114,10 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     AndroidRpiOverlay \
     BluetoothRpiOverlay \
+    CarActivityResolverOverlay \
     CarServiceRpiOverlay \
     CarSystemUIRpiOverlay \
+    PermissionControllerOverlay \
     SettingsProviderRpiOverlay \
     WifiRpiOverlay
 

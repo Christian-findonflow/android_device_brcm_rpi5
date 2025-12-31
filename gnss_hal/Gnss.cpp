@@ -26,7 +26,7 @@
 namespace aidl::android::hardware::gnss::implementation {
 
 Gnss::Gnss() {
-    ALOGI("Gnss HAL for Raspberry Pi 5 created");
+    ALOGE("GnssHalRpi5: Constructor called - HAL instance created");
 }
 
 Gnss::~Gnss() {
@@ -60,7 +60,7 @@ std::string Gnss::getGpsDevice() {
 }
 
 ndk::ScopedAStatus Gnss::setCallback(const std::shared_ptr<IGnssCallback>& callback) {
-    ALOGD("setCallback");
+    ALOGE("GnssHalRpi5: setCallback() CALLED - this is the critical initialization!");
 
     {
         std::lock_guard<std::mutex> lock(mMutex);
@@ -88,6 +88,21 @@ ndk::ScopedAStatus Gnss::setCallback(const std::shared_ptr<IGnssCallback>& callb
     status = callback->gnssSetSystemInfoCb(systemInfo);
     if (!status.isOk()) {
         ALOGE("Failed to set system info");
+    }
+
+    // Auto-start GPS for vehicle/dashboard use case
+    // This device is always vehicle-powered, so continuous GPS is acceptable.
+    // Apps like OsmAnd use passive provider which doesn't trigger GPS,
+    // so we auto-start to feed locations to passive listeners.
+    if (!mActive) {
+        ALOGI("Auto-starting GPS (vehicle dashboard mode)");
+        start();
+    }
+    
+    // If we already have a location from auto-start, report it immediately
+    if (mHasLastLocation) {
+        ALOGI("Reporting cached location to new callback");
+        callback->gnssLocationCb(mLastLocation);
     }
 
     return ndk::ScopedAStatus::ok();
@@ -191,6 +206,10 @@ void Gnss::threadFunc() {
                 // Report location at configured interval
                 if (mNmeaParser.hasValidFix() && (now - lastReportTime >= mIntervalMs)) {
                     GnssLocation location = mNmeaParser.getLocation();
+                    
+                    // Always store last location for passive provider support
+                    mLastLocation = location;
+                    mHasLastLocation = true;
 
                     std::lock_guard<std::mutex> lock(mMutex);
                     if (mCallback) {
@@ -200,6 +219,11 @@ void Gnss::threadFunc() {
                                   location.latitudeDegrees, location.longitudeDegrees);
                             lastReportTime = now;
                         }
+                    } else {
+                        // Log even without callback for debugging
+                        ALOGD("GPS fix (no callback): %.6f, %.6f",
+                              location.latitudeDegrees, location.longitudeDegrees);
+                        lastReportTime = now;
                     }
                 }
             }
@@ -246,7 +270,25 @@ ndk::ScopedAStatus Gnss::setPositionMode(const PositionModeOptions& options) {
 }
 
 ndk::ScopedAStatus Gnss::startSvStatus() {
-    ALOGD("startSvStatus");
+    ALOGE("GnssHalRpi5: startSvStatus() called, mCallback=%p, mActive=%d", mCallback.get(), mActive.load());
+    
+    // Auto-start GPS when satellite status is requested
+    // This is called by the framework even for passive listeners
+    if (!mActive) {
+        ALOGI("startSvStatus triggering GPS auto-start for vehicle dashboard mode");
+        std::string device = getGpsDevice();
+        if (!device.empty() && access(device.c_str(), R_OK | W_OK) == 0) {
+            if (mSerialPort.open(device, 9600)) {
+                mRunning = true;
+                mActive = true;
+                mThread = std::thread(&Gnss::threadFunc, this);
+                ALOGI("GPS auto-started successfully via startSvStatus");
+            } else {
+                ALOGE("Failed to open GPS device: %s", device.c_str());
+            }
+        }
+    }
+    
     return ndk::ScopedAStatus::ok();
 }
 

@@ -88,6 +88,11 @@ class Gnss : public BnGnss {
 
     SerialPort mSerialPort;
     NmeaParser mNmeaParser;
+    
+    // Store last valid location for passive provider support
+    GnssLocation mLastLocation;
+    std::atomic<bool> mHasLastLocation{false};
+    
 };
 
 }  // namespace aidl::android::hardware::gnss::implementation

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Copyright (C) 2024 The Android Open Source Project
+
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+
+         http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+-->
+<!-- Reduced dimensions for small 800x480 motorcycle dashboard screen -->
+<resources>
+    <!-- Reduce list item heights from 96dp to 56dp for compact dialogs -->
+    <dimen name="car_single_line_list_item_height">56dp</dimen>
+    <dimen name="car_double_line_list_item_height">56dp</dimen>
+
+    <!-- Reduce app bar and card heights -->
+    <dimen name="car_app_bar_height">56dp</dimen>
+    <dimen name="car_card_header_height">48dp</dimen>
+    <dimen name="car_card_action_bar_height">48dp</dimen>
+
+    <!-- Reduce touch target size for smaller screen -->
+    <dimen name="car_touch_target_size">56dp</dimen>
+    <dimen name="car_touch_target_size_minus_one">55dp</dimen>
+
+    <!-- Reduce button height -->
+    <dimen name="car_button_height">44dp</dimen>
+
+    <!-- Reduce Intent Resolver dimensions for narrow right TDA (592px wide) -->
+    <dimen name="car_activity_resolver_width">280dp</dimen>
+    <dimen name="car_activity_resolver_list_item_height">48dp</dimen>
+    <dimen name="car_activity_resolver_list_max_height">180dp</dimen>
+    <dimen name="car_activity_resolver_corner_radius">16dp</dimen>
+    
+    <!-- Standard resolver dimensions (non-car) -->
+    <dimen name="resolver_max_width">320dp</dimen>
+    <dimen name="resolver_icon_size">32dp</dimen>
+    <dimen name="resolver_icon_margin">12dp</dimen>
+    <dimen name="resolver_edge_margin">12dp</dimen>
+    <dimen name="resolver_small_margin">8dp</dimen>
+
+    <!-- Reduce keylines for smaller screen -->
+    <dimen name="car_keyline_1">24dp</dimen>
+    <dimen name="car_keyline_2">56dp</dimen>
+    <dimen name="car_keyline_3">80dp</dimen>
+
+    <!-- Reduce margins and paddings -->
+    <dimen name="car_margin">12dp</dimen>
+    <dimen name="car_padding_4">16dp</dimen>
+    <dimen name="car_padding_5">32dp</dimen>
+    <dimen name="car_padding_6">48dp</dimen>
+
+    <!-- Reduce icon sizes slightly -->
+    <dimen name="car_icon_size">44dp</dimen>
+    <dimen name="car_primary_icon_size">36dp</dimen>
+    <dimen name="car_large_avatar_size">64dp</dimen>
+
+    <!-- Car UI lib overrides for small screen AlertDialogs -->
+    <dimen name="car_ui_list_item_height">48dp</dimen>
+    <dimen name="car_ui_list_item_header_height">40dp</dimen>
+    <dimen name="car_ui_list_item_icon_size">24dp</dimen>
+    <dimen name="car_ui_list_item_text_size">14sp</dimen>
+    <dimen name="car_ui_list_item_body_text_size">12sp</dimen>
+    <dimen name="car_ui_list_item_start_inset">8dp</dimen>
+    <dimen name="car_ui_list_item_end_inset">8dp</dimen>
+    <dimen name="car_ui_alert_dialog_title_text_size">16sp</dimen>
+    <dimen name="car_ui_alert_dialog_subtitle_text_size">12sp</dimen>
+    <dimen name="car_ui_dialog_edittext_height">40dp</dimen>
+
+    <!-- Reduce permission dialog dimensions for narrow right TDA -->
+    <dimen name="car_location_permission_prompt_min_width">280dp</dimen>
+    <dimen name="car_location_permission_prompt_padding_large">20dp</dimen>
+    <dimen name="car_location_permission_prompt_padding">16dp</dimen>
+    <dimen name="car_location_permission_prompt_padding_medium">12dp</dimen>
+    <dimen name="car_location_permission_prompt_padding_small">8dp</dimen>
+    <dimen name="car_location_permission_prompt_margin_large">16dp</dimen>
+    <dimen name="car_location_permission_prompt_margin_medium">12dp</dimen>
+    <dimen name="car_location_permission_prompt_margin_small">8dp</dimen>
+    <dimen name="car_location_permission_prompt_button_text_size">18sp</dimen>
+    <dimen name="car_location_permission_prompt_text_size_xlarge">20sp</dimen>
+    <dimen name="car_location_permission_prompt_line_height_xlarge">24sp</dimen>
+    <dimen name="car_location_permission_prompt_text_size_large">16sp</dimen>
+    <dimen name="car_location_permission_prompt_text_size_medium">14sp</dimen>
+    <dimen name="car_location_permission_prompt_text_size_small">12sp</dimen>
+    <dimen name="car_location_permission_prompt_radio_button_text_size">16sp</dimen>
+</resources>

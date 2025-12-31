@@ -81,3 +81,7 @@ ro.setupwizard.mode=DISABLED
 ro.config.skip_first_use_hints=true
 persist.sys.disable_rescue=true
 ro.sys.sdcardfs=false
+
+# ADB over WiFi
+service.adb.tcp.port=5555
+persist.adb.tcp.port=5555
