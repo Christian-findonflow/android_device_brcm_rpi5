@@ -391,6 +391,76 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
         mCurrentValues[config.prop] = value;
     }
 
+    // ========================================================================
+    // BMS Properties (Orion BMS OBD2 data)
+    // ========================================================================
+
+    // Helper lambda to add float vendor properties
+    auto addFloatVendorProp = [this](int32_t propId, float minVal, float maxVal, float defaultVal) {
+        VehiclePropConfig config;
+        config.prop = propId;
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::CONTINUOUS;
+        config.minSampleRate = 0.5f;
+        config.maxSampleRate = 10.0f;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        areaConfig.minFloatValue = minVal;
+        areaConfig.maxFloatValue = maxVal;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+        
+        VehiclePropValue value;
+        value.prop = propId;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.floatValues.push_back(defaultVal);
+        mCurrentValues[propId] = value;
+    };
+
+    // Helper lambda to add int vendor properties
+    auto addIntVendorProp = [this](int32_t propId, int32_t defaultVal) {
+        VehiclePropConfig config;
+        config.prop = propId;
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::ON_CHANGE;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+        
+        VehiclePropValue value;
+        value.prop = propId;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.int32Values.push_back(defaultVal);
+        mCurrentValues[propId] = value;
+    };
+
+    // Pack health and capacity
+    addFloatVendorProp(VENDOR_PACK_SOH, 0.0f, 100.0f, 100.0f);           // State of Health %
+    addFloatVendorProp(VENDOR_PACK_AMPHOURS, 0.0f, 500.0f, 100.0f);      // Capacity Ah
+    addFloatVendorProp(VENDOR_PACK_RESISTANCE, 0.0f, 1000.0f, 0.0f);     // Resistance mOhm
+    addIntVendorProp(VENDOR_PACK_CYCLES, 0);                             // Cycle count
+
+    // Pack temperatures
+    addFloatVendorProp(VENDOR_PACK_TEMP_AVG, -40.0f, 80.0f, 25.0f);      // Avg temp
+    addFloatVendorProp(VENDOR_PACK_TEMP_HIGH, -40.0f, 80.0f, 25.0f);     // High temp
+    addFloatVendorProp(VENDOR_PACK_TEMP_LOW, -40.0f, 80.0f, 25.0f);      // Low temp
+    addFloatVendorProp(VENDOR_HEATSINK_TEMP, -40.0f, 80.0f, 25.0f);      // Heatsink temp
+    addIntVendorProp(VENDOR_FAN_SPEED, 0);                               // Fan speed 0-6
+
+    // Cell voltages
+    addFloatVendorProp(VENDOR_CELL_VOLTAGE_LOW, 0.0f, 5.0f, 3.7f);       // Low cell V
+    addFloatVendorProp(VENDOR_CELL_VOLTAGE_HIGH, 0.0f, 5.0f, 3.7f);      // High cell V
+    addFloatVendorProp(VENDOR_CELL_VOLTAGE_AVG, 0.0f, 5.0f, 3.7f);       // Avg cell V
+    addIntVendorProp(VENDOR_CELL_LOW_ID, 0);                             // Low cell #
+    addIntVendorProp(VENDOR_CELL_HIGH_ID, 0);                            // High cell #
+
+    // Current limits
+    addFloatVendorProp(VENDOR_CHARGE_LIMIT, 0.0f, 500.0f, 0.0f);         // Charge limit A
+    addFloatVendorProp(VENDOR_DISCHARGE_LIMIT, 0.0f, 500.0f, 0.0f);      // Discharge limit A
+
     LOG(INFO) << "Initialized " << mPropertyConfigs.size() << " property configs";
 }
 
@@ -618,14 +688,15 @@ void MotorcycleVehicleHardware::processControllerTemps(const uint8_t* data) {
 }
 
 void MotorcycleVehicleHardware::processBmsData(const uint8_t* data) {
-    // Byte 0-1: Ah remaining (0.1Ah resolution)
-    // int ahRaw = data[0] | (data[1] << 8);
+    // BMS broadcast message 0x6B1 (from Neo CAN Matrix)
+    // Byte 0: Amphours remaining
+    int amphours = data[0];
     
-    // Byte 2: Battery temperature (°C)
-    // int batteryTemp = data[2];
+    // Byte 1: Battery temperature (°C)
+    int batteryTemp = data[1];
     
-    // Byte 3: State of Charge (%)
-    int soc = data[3];
+    // Byte 2: State of Charge (%)
+    int soc = data[2];
 
     int64_t timestamp = elapsedRealtimeNano();
 
@@ -637,6 +708,28 @@ void MotorcycleVehicleHardware::processBmsData(const uint8_t* data) {
         value.timestamp = timestamp;
         notifyPropertyChange(static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL), value);
     }
+
+    // Update Pack Amphours
+    {
+        std::lock_guard<std::mutex> lock(mValuesMutex);
+        auto& value = mCurrentValues[VENDOR_PACK_AMPHOURS];
+        value.value.floatValues[0] = static_cast<float>(amphours);
+        value.timestamp = timestamp;
+        notifyPropertyChange(VENDOR_PACK_AMPHOURS, value);
+    }
+
+    // Update Pack Temperature (use as average temp from BMS broadcast)
+    {
+        std::lock_guard<std::mutex> lock(mValuesMutex);
+        auto& value = mCurrentValues[VENDOR_PACK_TEMP_AVG];
+        value.value.floatValues[0] = static_cast<float>(batteryTemp);
+        value.timestamp = timestamp;
+        notifyPropertyChange(VENDOR_PACK_TEMP_AVG, value);
+    }
+
+    // TODO: For full BMS data (SOH, cell voltages, temps, limits, etc.),
+    // implement OBD2 Mode 0x22 request/response handling to query Orion BMS PIDs.
+    // The broadcast only provides basic SOC, temp, and Ah.
 }
 
 float MotorcycleVehicleHardware::calculateSpeedFromRpm(int rpm) const {

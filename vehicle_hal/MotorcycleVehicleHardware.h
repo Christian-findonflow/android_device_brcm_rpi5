@@ -44,11 +44,29 @@ constexpr uint32_t CAN_ID_BMS = 0x6B1;                      // Battery SoC, Temp
 
 // Vendor-specific property IDs for motorcycle data
 // Format: 0x2[area_type][value_type][property_id]
-// Area type: 1 = GLOBAL, Value type: 6 = FLOAT
+// Area type: 1 = GLOBAL, Value type: 6 = FLOAT, 5 = INT32
 // Using vendor range: 0x21000000 - 0x2FFFFFFF
 constexpr int32_t VENDOR_BATTERY_VOLTAGE = 0x21600001;     // Battery voltage in volts
 constexpr int32_t VENDOR_BATTERY_CURRENT = 0x21600002;     // Battery current in amps
 constexpr int32_t VENDOR_THROTTLE_POSITION = 0x21600003;   // Throttle position 0-100% (as float)
+
+// BMS properties (from Orion BMS OBD2 PIDs)
+constexpr int32_t VENDOR_PACK_SOH = 0x21600010;            // Pack state of health (%)
+constexpr int32_t VENDOR_PACK_TEMP_AVG = 0x21600011;       // Pack average temperature (°C)
+constexpr int32_t VENDOR_CELL_VOLTAGE_LOW = 0x21600012;    // Lowest cell voltage (V)
+constexpr int32_t VENDOR_CELL_VOLTAGE_HIGH = 0x21600013;   // Highest cell voltage (V)
+constexpr int32_t VENDOR_PACK_TEMP_HIGH = 0x21600014;      // Pack highest temperature (°C)
+constexpr int32_t VENDOR_PACK_TEMP_LOW = 0x21600015;       // Pack lowest temperature (°C)
+constexpr int32_t VENDOR_PACK_CYCLES = 0x21500016;         // Total pack cycles (int)
+constexpr int32_t VENDOR_PACK_AMPHOURS = 0x21600017;       // Pack capacity (Ah)
+constexpr int32_t VENDOR_PACK_RESISTANCE = 0x21600018;     // Pack resistance (mOhm)
+constexpr int32_t VENDOR_CHARGE_LIMIT = 0x21600019;        // Charge current limit (A)
+constexpr int32_t VENDOR_DISCHARGE_LIMIT = 0x2160001A;     // Discharge current limit (A)
+constexpr int32_t VENDOR_CELL_VOLTAGE_AVG = 0x2160001B;    // Average cell voltage (V)
+constexpr int32_t VENDOR_CELL_LOW_ID = 0x2150001C;         // Low cell ID (int)
+constexpr int32_t VENDOR_CELL_HIGH_ID = 0x2150001D;        // High cell ID (int)
+constexpr int32_t VENDOR_FAN_SPEED = 0x2150001E;           // Fan speed 0-6 (int)
+constexpr int32_t VENDOR_HEATSINK_TEMP = 0x2160001F;       // Heatsink temperature (°C)
 
 // GPIO configuration (BCM pin numbers, -1 = disabled)
 constexpr int GPIO_PIN_LEFT_TURN = -1;   // Will be read from system property
