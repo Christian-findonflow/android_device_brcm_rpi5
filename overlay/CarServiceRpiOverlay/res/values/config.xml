@@ -62,6 +62,11 @@
     <!-- Default home activity - CarLauncher with integrated motorcycle dashboard -->
     <string name="defaultHomeActivity" translatable="false">com.android.car.carlauncher/com.android.car.carlauncher.CarLauncher</string>
 
+    <!-- Launch HomeCockpitActivity in right TDA on user unlock -->
+    <string-array translatable="false" name="config_earlyStartupServices">
+        <item>com.android.car.carlauncher/.HomeCockpitLauncherService#bind=start,user=foreground,trigger=userUnlocked</item>
+    </string-array>
+
     <!-- A name of a camera device that provides the rearview through EVS service -->
     <string name="config_evsRearviewCameraId" translatable="false">/dev/video0</string>
 
