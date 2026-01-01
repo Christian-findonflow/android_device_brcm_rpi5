@@ -13,6 +13,7 @@
 #include <VehicleUtils.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -41,6 +42,31 @@ using ::aidl::android::hardware::automotive::vehicle::VehiclePropertyChangeMode;
 constexpr uint32_t CAN_ID_CONTROLLER_STATUS = 0x10261022;  // RPM, Gear, Battery V/A, Errors
 constexpr uint32_t CAN_ID_CONTROLLER_TEMPS = 0x10261023;   // Controller/Motor temps, Throttle
 constexpr uint32_t CAN_ID_BMS = 0x6B1;                      // Battery SoC, Temp
+
+// OBD2 CAN IDs for Orion BMS (standard 11-bit IDs)
+constexpr uint32_t CAN_ID_OBD2_REQUEST = 0x7E0;            // OBD2 request to BMS
+constexpr uint32_t CAN_ID_OBD2_RESPONSE = 0x7E8;           // OBD2 response from BMS
+
+// Orion BMS OBD2 PIDs (Mode 0x22 - Extended Diagnostics)
+constexpr uint16_t BMS_PID_PACK_CURRENT = 0xF00C;          // Signed pack current (0.1A)
+constexpr uint16_t BMS_PID_PACK_VOLTAGE = 0xF00D;          // Pack voltage (0.1V)
+constexpr uint16_t BMS_PID_PACK_SOC = 0xF00F;              // State of charge (0.5%)
+constexpr uint16_t BMS_PID_PACK_SOH = 0xF013;              // State of health (%)
+constexpr uint16_t BMS_PID_PACK_CYCLES = 0xF018;           // Total cycles
+constexpr uint16_t BMS_PID_TEMP_HIGH = 0xF028;             // Highest pack temp (°C)
+constexpr uint16_t BMS_PID_TEMP_LOW = 0xF029;              // Lowest pack temp (°C)
+constexpr uint16_t BMS_PID_TEMP_AVG = 0xF02A;              // Average pack temp (°C)
+constexpr uint16_t BMS_PID_HEATSINK_TEMP = 0xF02D;         // Heatsink temp (°C)
+constexpr uint16_t BMS_PID_FAN_SPEED = 0xF02B;             // Fan speed (0-6)
+constexpr uint16_t BMS_PID_CELL_LOW = 0xF032;              // Low cell voltage (0.0001V)
+constexpr uint16_t BMS_PID_CELL_HIGH = 0xF033;             // High cell voltage (0.0001V)
+constexpr uint16_t BMS_PID_CELL_AVG = 0xF034;              // Avg cell voltage (0.0001V)
+constexpr uint16_t BMS_PID_CELL_LOW_ID = 0xF03E;           // Low cell ID
+constexpr uint16_t BMS_PID_CELL_HIGH_ID = 0xF03D;          // High cell ID
+constexpr uint16_t BMS_PID_CHARGE_LIMIT = 0xF00A;          // Charge current limit (A)
+constexpr uint16_t BMS_PID_DISCHARGE_LIMIT = 0xF00B;       // Discharge current limit (A)
+constexpr uint16_t BMS_PID_PACK_AMPHOURS = 0xF010;         // Pack Ah (0.1Ah)
+constexpr uint16_t BMS_PID_PACK_RESISTANCE = 0xF011;       // Pack resistance (0.01mOhm)
 
 // Vendor-specific property IDs for motorcycle data
 // Format: 0x2[area_type][value_type][property_id]
@@ -115,6 +141,13 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void processControllerTemps(const uint8_t* data);
     void processBmsData(const uint8_t* data);
     
+    // OBD2 BMS functions
+    void bmsPollingThread();
+    bool sendObd2Request(uint16_t pid);
+    void processObd2Response(const uint8_t* data, uint8_t len);
+    void updateBmsProperty(int32_t propId, float value);
+    void updateBmsPropertyInt(int32_t propId, int32_t value);
+    
     // GPIO functions
     void loadGpioConfig();
     bool openGpioChip();
@@ -136,6 +169,13 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int mCanSocket = -1;
     std::atomic<bool> mRunning{false};
     std::thread mCanReaderThread;
+    std::thread mBmsPollingThread;
+    
+    // OBD2 response tracking
+    std::mutex mObd2Mutex;
+    uint16_t mPendingPid = 0;
+    std::condition_variable mObd2ResponseCv;
+    bool mObd2ResponseReceived = false;
     
     // GPIO state
     int mGpioChipFd = -1;

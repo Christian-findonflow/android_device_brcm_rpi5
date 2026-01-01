@@ -49,12 +49,20 @@ MotorcycleVehicleHardware::MotorcycleVehicleHardware() {
         mGpioReaderThread = std::thread(&MotorcycleVehicleHardware::gpioReaderThread, this);
         LOG(INFO) << "GPIO reader thread started";
     }
+    
+    // Start BMS polling thread for OBD2 queries
+    mBmsPollingThread = std::thread(&MotorcycleVehicleHardware::bmsPollingThread, this);
+    LOG(INFO) << "BMS polling thread started";
 }
 
 MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
     mRunning = false;
+    mObd2ResponseCv.notify_all();  // Wake up BMS polling thread
     if (mCanReaderThread.joinable()) {
         mCanReaderThread.join();
+    }
+    if (mBmsPollingThread.joinable()) {
+        mBmsPollingThread.join();
     }
     if (mGpioReaderThread.joinable()) {
         mGpioReaderThread.join();
@@ -558,6 +566,9 @@ void MotorcycleVehicleHardware::processCanFrame(const struct can_frame& frame) {
     } else {
         if (canId == CAN_ID_BMS) {
             processBmsData(frame.data);
+        } else if (canId == CAN_ID_OBD2_RESPONSE) {
+            // OBD2 response from BMS
+            processObd2Response(frame.data, frame.can_dlc);
         }
     }
 }
@@ -727,9 +738,266 @@ void MotorcycleVehicleHardware::processBmsData(const uint8_t* data) {
         notifyPropertyChange(VENDOR_PACK_TEMP_AVG, value);
     }
 
-    // TODO: For full BMS data (SOH, cell voltages, temps, limits, etc.),
-    // implement OBD2 Mode 0x22 request/response handling to query Orion BMS PIDs.
-    // The broadcast only provides basic SOC, temp, and Ah.
+}
+
+// ============================================================================
+// OBD2 BMS Implementation (Orion BMS Mode 0x22 Extended Diagnostics)
+// ============================================================================
+
+void MotorcycleVehicleHardware::updateBmsProperty(int32_t propId, float value) {
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto it = mCurrentValues.find(propId);
+    if (it != mCurrentValues.end()) {
+        it->second.value.floatValues[0] = value;
+        it->second.timestamp = elapsedRealtimeNano();
+        notifyPropertyChange(propId, it->second);
+    }
+}
+
+void MotorcycleVehicleHardware::updateBmsPropertyInt(int32_t propId, int32_t value) {
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto it = mCurrentValues.find(propId);
+    if (it != mCurrentValues.end()) {
+        it->second.value.int32Values[0] = value;
+        it->second.timestamp = elapsedRealtimeNano();
+        notifyPropertyChange(propId, it->second);
+    }
+}
+
+bool MotorcycleVehicleHardware::sendObd2Request(uint16_t pid) {
+    if (mCanSocket < 0) {
+        return false;
+    }
+
+    // OBD2 Mode 0x22 request format:
+    // Byte 0: Length (3 bytes follow)
+    // Byte 1: Mode (0x22 = Read Data By Identifier)
+    // Byte 2-3: PID (big-endian)
+    struct can_frame frame;
+    std::memset(&frame, 0, sizeof(frame));
+    frame.can_id = CAN_ID_OBD2_REQUEST;
+    frame.can_dlc = 8;
+    frame.data[0] = 0x03;  // 3 bytes follow
+    frame.data[1] = 0x22;  // Mode 0x22
+    frame.data[2] = (pid >> 8) & 0xFF;  // PID high byte
+    frame.data[3] = pid & 0xFF;         // PID low byte
+    // Bytes 4-7 are padding (0x00)
+
+    {
+        std::lock_guard<std::mutex> lock(mObd2Mutex);
+        mPendingPid = pid;
+        mObd2ResponseReceived = false;
+    }
+
+    ssize_t nbytes = write(mCanSocket, &frame, sizeof(frame));
+    if (nbytes != sizeof(frame)) {
+        LOG(WARNING) << "Failed to send OBD2 request for PID 0x" << std::hex << pid;
+        return false;
+    }
+
+    return true;
+}
+
+void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t len) {
+    if (len < 4) return;
+
+    // OBD2 Mode 0x22 response format:
+    // Byte 0: Length
+    // Byte 1: Mode + 0x40 (0x62 for Mode 0x22 response)
+    // Byte 2-3: PID (big-endian)
+    // Byte 4+: Data
+    
+    if (data[1] != 0x62) {
+        // Not a Mode 0x22 response
+        return;
+    }
+
+    uint16_t pid = (data[2] << 8) | data[3];
+    uint8_t dataLen = data[0] - 3;  // Subtract mode + PID bytes
+
+    // Notify waiting thread
+    {
+        std::lock_guard<std::mutex> lock(mObd2Mutex);
+        if (pid == mPendingPid) {
+            mObd2ResponseReceived = true;
+            mObd2ResponseCv.notify_one();
+        }
+    }
+
+    // Parse response based on PID
+    switch (pid) {
+        case BMS_PID_PACK_SOH: {
+            // 1 byte, direct percentage
+            if (dataLen >= 1) {
+                updateBmsProperty(VENDOR_PACK_SOH, static_cast<float>(data[4]));
+            }
+            break;
+        }
+        case BMS_PID_PACK_CYCLES: {
+            // 2 bytes, direct count
+            if (dataLen >= 2) {
+                int cycles = data[4] | (data[5] << 8);
+                updateBmsPropertyInt(VENDOR_PACK_CYCLES, cycles);
+            }
+            break;
+        }
+        case BMS_PID_TEMP_HIGH: {
+            // 1 byte, °C with -40 offset
+            if (dataLen >= 1) {
+                updateBmsProperty(VENDOR_PACK_TEMP_HIGH, static_cast<float>(data[4]) - 40.0f);
+            }
+            break;
+        }
+        case BMS_PID_TEMP_LOW: {
+            if (dataLen >= 1) {
+                updateBmsProperty(VENDOR_PACK_TEMP_LOW, static_cast<float>(data[4]) - 40.0f);
+            }
+            break;
+        }
+        case BMS_PID_TEMP_AVG: {
+            if (dataLen >= 1) {
+                updateBmsProperty(VENDOR_PACK_TEMP_AVG, static_cast<float>(data[4]) - 40.0f);
+            }
+            break;
+        }
+        case BMS_PID_HEATSINK_TEMP: {
+            if (dataLen >= 1) {
+                updateBmsProperty(VENDOR_HEATSINK_TEMP, static_cast<float>(data[4]) - 40.0f);
+            }
+            break;
+        }
+        case BMS_PID_FAN_SPEED: {
+            if (dataLen >= 1) {
+                updateBmsPropertyInt(VENDOR_FAN_SPEED, data[4]);
+            }
+            break;
+        }
+        case BMS_PID_CELL_LOW: {
+            // 2 bytes, 0.0001V resolution
+            if (dataLen >= 2) {
+                int raw = data[4] | (data[5] << 8);
+                updateBmsProperty(VENDOR_CELL_VOLTAGE_LOW, raw * 0.0001f);
+            }
+            break;
+        }
+        case BMS_PID_CELL_HIGH: {
+            if (dataLen >= 2) {
+                int raw = data[4] | (data[5] << 8);
+                updateBmsProperty(VENDOR_CELL_VOLTAGE_HIGH, raw * 0.0001f);
+            }
+            break;
+        }
+        case BMS_PID_CELL_AVG: {
+            if (dataLen >= 2) {
+                int raw = data[4] | (data[5] << 8);
+                updateBmsProperty(VENDOR_CELL_VOLTAGE_AVG, raw * 0.0001f);
+            }
+            break;
+        }
+        case BMS_PID_CELL_LOW_ID: {
+            if (dataLen >= 2) {
+                int cellId = data[4] | (data[5] << 8);
+                updateBmsPropertyInt(VENDOR_CELL_LOW_ID, cellId);
+            }
+            break;
+        }
+        case BMS_PID_CELL_HIGH_ID: {
+            if (dataLen >= 2) {
+                int cellId = data[4] | (data[5] << 8);
+                updateBmsPropertyInt(VENDOR_CELL_HIGH_ID, cellId);
+            }
+            break;
+        }
+        case BMS_PID_CHARGE_LIMIT: {
+            // 2 bytes, direct amps
+            if (dataLen >= 2) {
+                int amps = data[4] | (data[5] << 8);
+                updateBmsProperty(VENDOR_CHARGE_LIMIT, static_cast<float>(amps));
+            }
+            break;
+        }
+        case BMS_PID_DISCHARGE_LIMIT: {
+            if (dataLen >= 2) {
+                int amps = data[4] | (data[5] << 8);
+                updateBmsProperty(VENDOR_DISCHARGE_LIMIT, static_cast<float>(amps));
+            }
+            break;
+        }
+        case BMS_PID_PACK_AMPHOURS: {
+            // 2 bytes, 0.1Ah resolution
+            if (dataLen >= 2) {
+                int raw = data[4] | (data[5] << 8);
+                updateBmsProperty(VENDOR_PACK_AMPHOURS, raw * 0.1f);
+            }
+            break;
+        }
+        case BMS_PID_PACK_RESISTANCE: {
+            // 2 bytes, 0.01mOhm resolution
+            if (dataLen >= 2) {
+                int raw = data[4] | (data[5] << 8);
+                updateBmsProperty(VENDOR_PACK_RESISTANCE, raw * 0.01f);
+            }
+            break;
+        }
+        default:
+            LOG(DEBUG) << "Unknown BMS PID response: 0x" << std::hex << pid;
+            break;
+    }
+}
+
+void MotorcycleVehicleHardware::bmsPollingThread() {
+    LOG(INFO) << "BMS polling thread starting...";
+    
+    // Wait for CAN socket to be ready
+    while (mRunning && mCanSocket < 0) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    
+    if (!mRunning) return;
+    
+    LOG(INFO) << "BMS polling thread active, starting OBD2 queries";
+    
+    // List of PIDs to poll (slower-changing data)
+    const std::vector<uint16_t> pollPids = {
+        BMS_PID_PACK_SOH,
+        BMS_PID_PACK_CYCLES,
+        BMS_PID_TEMP_HIGH,
+        BMS_PID_TEMP_LOW,
+        BMS_PID_TEMP_AVG,
+        BMS_PID_HEATSINK_TEMP,
+        BMS_PID_FAN_SPEED,
+        BMS_PID_CELL_LOW,
+        BMS_PID_CELL_HIGH,
+        BMS_PID_CELL_AVG,
+        BMS_PID_CELL_LOW_ID,
+        BMS_PID_CELL_HIGH_ID,
+        BMS_PID_CHARGE_LIMIT,
+        BMS_PID_DISCHARGE_LIMIT,
+        BMS_PID_PACK_AMPHOURS,
+        BMS_PID_PACK_RESISTANCE,
+    };
+    
+    size_t pidIndex = 0;
+    
+    while (mRunning) {
+        // Send request for current PID
+        uint16_t pid = pollPids[pidIndex];
+        
+        if (sendObd2Request(pid)) {
+            // Wait for response (with timeout)
+            std::unique_lock<std::mutex> lock(mObd2Mutex);
+            mObd2ResponseCv.wait_for(lock, std::chrono::milliseconds(100),
+                [this] { return mObd2ResponseReceived || !mRunning; });
+        }
+        
+        // Move to next PID
+        pidIndex = (pidIndex + 1) % pollPids.size();
+        
+        // Delay between requests (100ms between each, full cycle ~1.6s)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    LOG(INFO) << "BMS polling thread exiting";
 }
 
 float MotorcycleVehicleHardware::calculateSpeedFromRpm(int rpm) const {
