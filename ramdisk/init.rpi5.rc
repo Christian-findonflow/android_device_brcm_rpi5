@@ -16,9 +16,10 @@ on post-fs-data
     exec_background u:r:shell:s0 -- /system/bin/ip link set can1 type can bitrate 250000
     exec_background u:r:shell:s0 -- /system/bin/ip link set can1 up
 
-# Start MotoDash and GPS init after boot completes
-on property:sys.boot_completed=1
-    exec_background u:r:shell:s0 -- /system/bin/am start -W -c android.intent.category.HOME -a android.intent.action.MAIN -n com.moto.dash/.DashActivity
+# Launch HomeCockpitActivity in right TDA after boot completes
+# Note: This runs as user 0, but the persistent routing in MotoSplitDisplayAreaController
+# ensures HomeCockpitActivity goes to the right TDA when launched via Home button.
+# Auto-launch doesn't work reliably from init due to user context issues.
 
 # GPS initialization - delayed trigger using property
 on property:sys.boot_completed=1 && property:service.bootanim.exit=1
