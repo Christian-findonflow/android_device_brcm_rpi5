@@ -93,6 +93,32 @@ side-stand indicator, TESTING.md correction) is done.
 - *(Optional)* Cuttlefish kernel with CONFIG_GPIO_SIM=y for true GPIO-path
   emulation (current debug source covers property->UI only).
 
+### UX (from the 2026-08-29 evening review)
+- **Cluster turn-by-turn**: next-turn arrow + distance beside the speed via
+  OsmAnd's AIDL API. The single biggest remaining product feature.
+- **Ignition-sense power story**: orderly shutdown (or suspend, if the Pi 5
+  can) driven by an ignition input on the spare 4th optoisolator channel.
+  Hardware decision needed first - see "Blocked on Christian".
+- **Night brightness**: no ambient sensor, but GPS gives sunrise/sunset for
+  scheduled dimming. Panel facts from "FNK0078 FAQs.pdf" (Freenove 5" DSI,
+  800x480): it exposes the standard
+  /sys/class/backlight/rpi_backlight/brightness (0-255) and the rpi5 lights
+  HAL already probes exactly that path, so Android's brightness pipeline
+  should just work - the feature is pure Android-side scheduling. The panel
+  also has a physical side button (+10% steps, long-press = backlight off),
+  a useful rider fallback that adjusts brightness behind Android's back.
+- **Screen mounting orientation**: if the case forces the panel upside down,
+  the FAQ's Raspbian rotation methods (display_lcd_rotate, X11 touch
+  matrices) do NOT apply to Android - use
+  ro.surface_flinger.primary_display_orientation plus a touch orientation
+  remap instead. Decide when the case design is final.
+- **Charging view refinements**: yield to a dead controller link (currently
+  latches the last state); link-gate the bottom-bar V/A chips in SystemUI.
+- **Ride summary** on key-off / next boot (distance, time, average Wh/km) -
+  data now exists; also feeds the learned range model.
+- **OsmAnd first-run**: pre-seed config or ship a region map (~1 GB image
+  cost - product decision).
+
 ## Known decode uncertainties (resolved by the ride capture)
 | Item | Current implementation | Open question |
 |---|---|---|
