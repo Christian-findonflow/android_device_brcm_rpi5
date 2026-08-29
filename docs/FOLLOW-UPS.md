@@ -93,6 +93,19 @@ side-stand indicator, TESTING.md correction) is done.
 - *(Optional)* Cuttlefish kernel with CONFIG_GPIO_SIM=y for true GPIO-path
   emulation (current debug source covers property->UI only).
 
+### Ghost cluster (priority - rider-visible)
+An empty translucent HOME root task in the default (right) TaskDisplayArea
+renders a frozen duplicate of the cluster whenever the right area has no app
+on top. Two dead ends, both documented in commits: SystemUI's explicit
+user-0 HOME launch (removed - it only ever created junk) and
+canHostHomeTask=false on the default TDA (REVERTED - system_server NPEs at
+RootWindowContainer:1953 on user switch; the framework requires a home root
+there). The correct fix: keep the right area occupied - auto-restore
+HomeCockpitActivity (as the CURRENT user, with launch-TDA options) whenever
+the default TDA's top becomes empty/home. This also fixes the UX gap where
+HOME leaves the right panel grey. Implement in MotoSplitDisplayAreaController
+via a task stack listener, or extend HomeCockpitLauncherService.
+
 ### UX (from the 2026-08-29 evening review)
 - **Cluster turn-by-turn: IMPLEMENTED** (CarLauncher ad248b48) - OsmAnd V1
   AIDL client + cluster widget, verified on the simulator up to the last
