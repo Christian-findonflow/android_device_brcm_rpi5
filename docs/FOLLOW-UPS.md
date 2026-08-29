@@ -4,6 +4,26 @@ Living list. Updated 2026-08-29 (evening) - the hardening batch (shutdown
 latency, BMS cadence + vcan responder, charge-rate units, log gating,
 side-stand indicator, TESTING.md correction) is done.
 
+## Recently completed (for the record)
+
+2026-08-29, verified on the simulator/harness unless noted:
+- Fault flags property + red/amber pulsing banner UI (critical vs degraded)
+- Odometer + trip: accumulation, persistence, trip reset, controller-compliant
+  0x1026105A display report (verified on the wire), odometer seed 115.413 km
+- Status flags property + SIDE STAND cluster banner
+- Turn signal / high beam indicators actually work (two permission mechanisms
+  fixed - they had never worked, in launcher AND SystemUI)
+- Subscribe seeding: UIs read current values at registration, so restarts
+  cannot hide an active fault/indicator
+- HAL shutdown made interruptible (test suite 25s -> 1ms)
+- BMS polling: all values within ~4s of boot, full refresh ~17s (was 85s
+  per value); moto_bms_sim vcan responder for end-to-end testing
+- Charge rate to AOSP units/sign; REGEN state on the power card
+- Hot-path logging gated behind persist.vendor.motodash.debug.canlog
+- Visual refresh: shared palette + MotorcycleTheme (one set of thresholds),
+  gradient cards, cluster RPM/battery bars
+- Cuttlefish simulator product, host test suite (19 tests), CAN replay tools
+
 ## Blocked on Christian (things only you can do)
 
 1. **Ride capture from the bike** - the single most valuable input:
