@@ -657,20 +657,24 @@ bool MotorcycleVehicleHardware::openCanSocket() {
 void MotorcycleVehicleHardware::canReaderThread() {
     LOG(INFO) << "CAN reader thread starting, will attempt to open CAN socket...";
     
-    // Retry opening CAN socket - interfaces may not be ready at boot
-    const int maxRetries = 30;  // 30 seconds max wait
-    for (int retry = 0; retry < maxRetries && mRunning; retry++) {
+    // Retry opening the CAN socket until it works. A vehicle HAL must never
+    // give up on its bus: kernel modules or the interface may come up late
+    // (seen in practice on the simulator), and a HAL that stopped retrying
+    // after 30s left the dashboard permanently dead until service restart.
+    for (int retry = 0; mRunning; retry++) {
         if (openCanSocket()) {
             LOG(INFO) << "CAN socket opened successfully after " << retry << " retries";
             break;
         }
-        LOG(WARNING) << "CAN socket not ready, retry " << (retry + 1) << "/" << maxRetries;
+        if (retry % 30 == 0) {
+            LOG(WARNING) << "CAN socket not ready (attempt " << (retry + 1)
+                         << "), retrying every 1s";
+        }
         if (!sleepUnlessStopping(1000)) break;
     }
-    
+
     if (mCanSocket < 0) {
-        LOG(ERROR) << "Failed to open CAN socket after retries, running in simulation mode";
-        return;
+        return;  // only reachable when shutting down
     }
     
     LOG(INFO) << "CAN reader thread running, socket fd=" << mCanSocket;
