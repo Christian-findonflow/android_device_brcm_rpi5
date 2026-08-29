@@ -100,8 +100,8 @@ side-stand indicator, TESTING.md correction) is done.
   can) driven by an ignition input on the spare 4th optoisolator channel.
   Hardware decision needed first - see "Blocked on Christian".
 - **Night brightness**: no ambient sensor, but GPS gives sunrise/sunset for
-  scheduled dimming. Panel facts from "FNK0078 FAQs.pdf" (Freenove 5" DSI,
-  800x480): it exposes the standard
+  scheduled dimming. Panel facts from "FNK0078 FAQs.pdf" (the FAQ covers several
+  panels; ours is the Freenove 7" DSI, 800x480): it exposes the standard
   /sys/class/backlight/rpi_backlight/brightness (0-255) and the rpi5 lights
   HAL already probes exactly that path, so Android's brightness pipeline
   should just work - the feature is pure Android-side scheduling. The panel
