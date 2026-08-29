@@ -94,8 +94,18 @@ side-stand indicator, TESTING.md correction) is done.
   emulation (current debug source covers property->UI only).
 
 ### UX (from the 2026-08-29 evening review)
-- **Cluster turn-by-turn**: next-turn arrow + distance beside the speed via
-  OsmAnd's AIDL API. The single biggest remaining product feature.
+- **Cluster turn-by-turn: IMPLEMENTED** (CarLauncher ad248b48) - OsmAnd V1
+  AIDL client + cluster widget, verified on the simulator up to the last
+  joint. Remaining: confirm OsmAnd fires updateNavigationInfo on real
+  position updates - needs live GPS (bench Pi or bike), or cuttlefish GPS
+  injection. Test hooks: vendor.motodash.debug.navroute="lat,lon,lat,lon"
+  and ...navdemo="turnType,distanceMeters".
+- **OsmAnd route card overflows the 800x480 panel**: the route-planning
+  bottom sheet renders mostly below the fold, leaving destination-setting
+  awkward on the bike. Investigate OsmAnd display settings, or drive
+  routing through our own UI via the AIDL navigate()/search calls.
+- **Speed limit on cluster**: not exposed by the V1 AIDL we vendored; the
+  V2 package (net.osmand.aidlapi) may differ - check before building.
 - **Ignition-sense power story**: orderly shutdown (or suspend, if the Pi 5
   can) driven by an ignition input on the spare 4th optoisolator channel.
   Hardware decision needed first - see "Blocked on Christian".
