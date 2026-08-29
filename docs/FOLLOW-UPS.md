@@ -78,8 +78,14 @@ side-stand indicator, TESTING.md correction) is done.
   the build.
 - **Fault detail screen**: banner tap -> full-screen fault list with
   plain-language explanations and "what to do".
-- **Boot time**: measure key-on -> dashboard-visible on the sim, then trim
-  (bootanimation length, unused services). Matters for a vehicle.
+- **Boot time**: measured on the simulator 2026-08-29. Warm boot (the key-on
+  case) is 9.3 s to screen; cold boot 19 s, and the difference is almost all
+  first-boot-only work (userdata format, mount_all --late 3.2 s, apex
+  activation ~5 s). Framework is ~6.5 s with 194 packages installed - the
+  leaner-base cleanup has a measurable KPI there. VHAL is up at 1.4 s.
+  Verdict: acceptable for now; revisit on Pi/NVMe hardware where the numbers
+  will differ. Deeper cuts mean kernel/init surgery - measure on hardware
+  before spending that effort.
 
 ### Simulator / harness
 - **Scripted ride generator**: synthesize a candump log (accel runs, gear

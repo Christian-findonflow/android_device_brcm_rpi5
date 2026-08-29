@@ -93,3 +93,19 @@ done
 (If `cansend` isn't on the device, workflow 2 on the host covers the same
 ground; or push a static-linked cansend.) Remember to set the property back
 to `can1` afterwards.
+
+## Cuttlefish gotcha: do not `adb reboot` the simulator
+
+Rebooting the guest inside a running cvd leaves the host stack (run_cvd,
+crosvm, webRTC) in a state that `cvd_internal_stop` no longer tears down, and
+the next `cvd_internal_start` fails with "Instance directory files in use".
+Recover with:
+
+```bash
+pkill -f 'bin/run_cvd'; sleep 2
+pkill -f 'bin/x86_64-linux-gnu/crosvm'; pkill -f 'bin/webRTC'
+pkill -f 'operator_proxy|openwrt_control_server|kernel_log_monitor|process_restarter|log_tee'
+```
+
+For boot-timing work, add `--extra_kernel_cmdline="log_buf_len=4M"` to the
+start command so the early kernel/init log survives to be read.
