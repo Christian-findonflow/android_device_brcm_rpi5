@@ -1,0 +1,314 @@
+/*
+ * Copyright (C) 2024 MotoDash Project
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Host-side unit tests for the motorcycle Vehicle HAL decode and config
+ * logic. These run on the development machine (atest --host
+ * motorcycle_vhal_test) with no device and no CAN bus: frames are fed
+ * directly into the decode path through a test peer.
+ */
+
+#include "MotorcycleVehicleHardware.h"
+
+#include <gtest/gtest.h>
+
+#include <linux/can.h>
+
+#include <mutex>
+#include <optional>
+#include <vector>
+
+namespace android::hardware::automotive::vehicle::motorcycle {
+
+using ::aidl::android::hardware::automotive::vehicle::VehicleGear;
+using ::aidl::android::hardware::automotive::vehicle::VehicleProperty;
+
+// Friended by MotorcycleVehicleHardware: exposes the private decode/config
+// entry points to the tests.
+class MotorcycleVehicleHardwareTestPeer {
+  public:
+    explicit MotorcycleVehicleHardwareTestPeer(MotorcycleVehicleHardware* hw) : mHw(hw) {}
+
+    void processCanFrame(const struct can_frame& frame) { mHw->processCanFrame(frame); }
+
+    StatusCode applyConfigValue(const VehiclePropValue& value) {
+        return mHw->applyConfigValue(value);
+    }
+
+  private:
+    MotorcycleVehicleHardware* mHw;
+};
+
+namespace {
+
+constexpr int32_t PROP_ENGINE_RPM = static_cast<int32_t>(VehicleProperty::ENGINE_RPM);
+constexpr int32_t PROP_SPEED = static_cast<int32_t>(VehicleProperty::PERF_VEHICLE_SPEED);
+constexpr int32_t PROP_CURRENT_GEAR = static_cast<int32_t>(VehicleProperty::CURRENT_GEAR);
+constexpr int32_t PROP_CHARGE_RATE =
+        static_cast<int32_t>(VehicleProperty::EV_BATTERY_INSTANTANEOUS_CHARGE_RATE);
+constexpr int32_t PROP_COOLANT = static_cast<int32_t>(VehicleProperty::ENGINE_COOLANT_TEMP);
+constexpr int32_t PROP_OIL = static_cast<int32_t>(VehicleProperty::ENGINE_OIL_TEMP);
+constexpr int32_t PROP_EV_BATTERY_LEVEL =
+        static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL);
+
+struct can_frame makeFrame(uint32_t id, bool extended, std::initializer_list<uint8_t> bytes) {
+    struct can_frame frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.can_id = id | (extended ? CAN_EFF_FLAG : 0);
+    frame.can_dlc = 8;
+    size_t i = 0;
+    for (uint8_t b : bytes) {
+        frame.data[i++] = b;
+    }
+    return frame;
+}
+
+VehiclePropValue makeFloatValue(int32_t propId, float value) {
+    VehiclePropValue v;
+    v.prop = propId;
+    v.areaId = 0;
+    v.value.floatValues = {value};
+    return v;
+}
+
+VehiclePropValue makeIntValue(int32_t propId, int32_t value) {
+    VehiclePropValue v;
+    v.prop = propId;
+    v.areaId = 0;
+    v.value.int32Values = {value};
+    return v;
+}
+
+class MotorcycleVehicleHardwareTest : public ::testing::Test {
+  protected:
+    void SetUp() override {
+        // Nonexistent interface: the reader thread stays in its retry loop and
+        // never interferes; frames are injected through the peer instead.
+        mHardware = std::make_unique<MotorcycleVehicleHardware>("vcan-test-none");
+        mHardware->registerOnPropertyChangeEvent(
+                std::make_unique<const IVehicleHardware::PropertyChangeCallback>(
+                        [this](std::vector<VehiclePropValue> values) {
+                            std::lock_guard<std::mutex> lock(mEventsMutex);
+                            for (auto& v : values) {
+                                mEvents.push_back(std::move(v));
+                            }
+                        }));
+        mPeer = std::make_unique<MotorcycleVehicleHardwareTestPeer>(mHardware.get());
+
+        // Config persists through property_set even on the host (in-process),
+        // so reset to defaults for test isolation.
+        mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_WHEEL_CIRCUMFERENCE, 1.894f));
+        mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_GEAR_RATIO, 4.0f));
+        mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_ID_CONTROLLER_STATUS,
+                                             static_cast<int32_t>(CAN_ID_CONTROLLER_STATUS)));
+        mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_ID_CONTROLLER_TEMPS,
+                                             static_cast<int32_t>(CAN_ID_CONTROLLER_TEMPS)));
+        mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_ID_BMS,
+                                             static_cast<int32_t>(CAN_ID_BMS)));
+        clearEvents();
+    }
+
+    std::optional<VehiclePropValue> lastEvent(int32_t propId) {
+        std::lock_guard<std::mutex> lock(mEventsMutex);
+        for (auto it = mEvents.rbegin(); it != mEvents.rend(); ++it) {
+            if (it->prop == propId) return *it;
+        }
+        return std::nullopt;
+    }
+
+    size_t countEvents(int32_t propId) {
+        std::lock_guard<std::mutex> lock(mEventsMutex);
+        size_t n = 0;
+        for (const auto& e : mEvents) {
+            if (e.prop == propId) n++;
+        }
+        return n;
+    }
+
+    void clearEvents() {
+        std::lock_guard<std::mutex> lock(mEventsMutex);
+        mEvents.clear();
+    }
+
+    std::unique_ptr<MotorcycleVehicleHardware> mHardware;
+    std::unique_ptr<MotorcycleVehicleHardwareTestPeer> mPeer;
+    std::mutex mEventsMutex;
+    std::vector<VehiclePropValue> mEvents;
+};
+
+// Controller status 0x10261022: [errors, flags|gear, rpmL, rpmH, vL, vH, aL, aH]
+TEST_F(MotorcycleVehicleHardwareTest, ControllerStatusDecodesRpmSpeedGearPower) {
+    // gear D (bits 4-7 = 3), rpm 3000, 72.0 V, 25.5 A discharge
+    auto frame = makeFrame(CAN_ID_CONTROLLER_STATUS, /*extended=*/true,
+                           {0x00, 0x30, 0xB8, 0x0B, 0xD0, 0x02, 0xFF, 0x00});
+    mPeer->processCanFrame(frame);
+
+    auto rpm = lastEvent(PROP_ENGINE_RPM);
+    ASSERT_TRUE(rpm.has_value());
+    EXPECT_FLOAT_EQ(rpm->value.floatValues[0], 3000.0f);
+
+    // Default config: 1.894 m circumference, ratio 4.0
+    auto speed = lastEvent(PROP_SPEED);
+    ASSERT_TRUE(speed.has_value());
+    EXPECT_NEAR(speed->value.floatValues[0], 3000.0f * 1.894f / (4.0f * 60.0f), 0.01f);
+
+    auto gear = lastEvent(PROP_CURRENT_GEAR);
+    ASSERT_TRUE(gear.has_value());
+    EXPECT_EQ(gear->value.int32Values[0], static_cast<int32_t>(VehicleGear::GEAR_DRIVE));
+
+    auto volts = lastEvent(VENDOR_BATTERY_VOLTAGE);
+    ASSERT_TRUE(volts.has_value());
+    EXPECT_FLOAT_EQ(volts->value.floatValues[0], 72.0f);
+
+    auto amps = lastEvent(VENDOR_BATTERY_CURRENT);
+    ASSERT_TRUE(amps.has_value());
+    EXPECT_FLOAT_EQ(amps->value.floatValues[0], 25.5f);
+
+    // NOTE: asserts current behavior (Watts, positive = discharge). AOSP
+    // defines this property as milliwatts, positive = charging - known issue.
+    auto power = lastEvent(PROP_CHARGE_RATE);
+    ASSERT_TRUE(power.has_value());
+    EXPECT_NEAR(power->value.floatValues[0], 72.0f * 25.5f, 0.5f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, RegenCurrentIsSigned) {
+    // current raw = -100 (0xFF9C little-endian) => -10.0 A (regen)
+    auto frame = makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                           {0x00, 0x20, 0x00, 0x00, 0xD0, 0x02, 0x9C, 0xFF});
+    mPeer->processCanFrame(frame);
+
+    auto amps = lastEvent(VENDOR_BATTERY_CURRENT);
+    ASSERT_TRUE(amps.has_value());
+    EXPECT_FLOAT_EQ(amps->value.floatValues[0], -10.0f);
+}
+
+// Controller temps 0x10261023: [ctrlTemp, motorTemp, -, hall, throttle, -, err, -]
+TEST_F(MotorcycleVehicleHardwareTest, ControllerTempsDecode) {
+    auto frame = makeFrame(CAN_ID_CONTROLLER_TEMPS, true,
+                           {45, 60, 0, 0, 55, 0, 0, 0});
+    mPeer->processCanFrame(frame);
+
+    auto ctrl = lastEvent(PROP_COOLANT);
+    ASSERT_TRUE(ctrl.has_value());
+    EXPECT_FLOAT_EQ(ctrl->value.floatValues[0], 45.0f);
+
+    auto motor = lastEvent(PROP_OIL);
+    ASSERT_TRUE(motor.has_value());
+    EXPECT_FLOAT_EQ(motor->value.floatValues[0], 60.0f);
+
+    auto throttle = lastEvent(VENDOR_THROTTLE_POSITION);
+    ASSERT_TRUE(throttle.has_value());
+    EXPECT_FLOAT_EQ(throttle->value.floatValues[0], 55.0f);
+}
+
+// BMS broadcast 0x6B1, observed layout: SOC = byte 3, temp = byte 7 - 40
+TEST_F(MotorcycleVehicleHardwareTest, BmsBroadcastDecodesSocAndTemp) {
+    auto frame = makeFrame(CAN_ID_BMS, /*extended=*/false,
+                           {0, 99, 0, 18, 3, 2, 0, 51});
+    mPeer->processCanFrame(frame);
+
+    auto soc = lastEvent(PROP_EV_BATTERY_LEVEL);
+    ASSERT_TRUE(soc.has_value());
+    EXPECT_FLOAT_EQ(soc->value.floatValues[0], 18.0f);
+
+    auto temp = lastEvent(VENDOR_PACK_TEMP_AVG);
+    ASSERT_TRUE(temp.has_value());
+    EXPECT_FLOAT_EQ(temp->value.floatValues[0], 11.0f);  // 51 - 40
+}
+
+// OBD2 Mode 0x22 response: [len, 0x62, pidHi, pidLo, data...]
+TEST_F(MotorcycleVehicleHardwareTest, Obd2SohResponse) {
+    auto frame = makeFrame(CAN_ID_OBD2_RESPONSE, false,
+                           {0x04, 0x62, 0xF0, 0x13, 95, 0, 0, 0});
+    mPeer->processCanFrame(frame);
+
+    auto soh = lastEvent(VENDOR_PACK_SOH);
+    ASSERT_TRUE(soh.has_value());
+    EXPECT_FLOAT_EQ(soh->value.floatValues[0], 95.0f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, Obd2CellVoltageScaling) {
+    // PID 0xF032 low cell voltage, raw 36500 (0x8E94, LE in payload) => 3.65 V
+    auto frame = makeFrame(CAN_ID_OBD2_RESPONSE, false,
+                           {0x05, 0x62, 0xF0, 0x32, 0x94, 0x8E, 0, 0});
+    mPeer->processCanFrame(frame);
+
+    auto low = lastEvent(VENDOR_CELL_VOLTAGE_LOW);
+    ASSERT_TRUE(low.has_value());
+    EXPECT_NEAR(low->value.floatValues[0], 3.65f, 0.0001f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, ConfigSpeedParamsApplyLive) {
+    EXPECT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_WHEEL_CIRCUMFERENCE, 2.0f)),
+              StatusCode::OK);
+    EXPECT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_GEAR_RATIO, 5.0f)),
+              StatusCode::OK);
+
+    // Config writes notify subscribers (keeps settings UIs in sync)
+    auto cfg = lastEvent(VENDOR_CFG_GEAR_RATIO);
+    ASSERT_TRUE(cfg.has_value());
+    EXPECT_FLOAT_EQ(cfg->value.floatValues[0], 5.0f);
+
+    // rpm 3000 with new config: 3000 / 5 wheel rpm * 2.0 m / 60 = 20 m/s
+    auto frame = makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                           {0x00, 0x20, 0xB8, 0x0B, 0xD0, 0x02, 0x00, 0x00});
+    mPeer->processCanFrame(frame);
+
+    auto speed = lastEvent(PROP_SPEED);
+    ASSERT_TRUE(speed.has_value());
+    EXPECT_NEAR(speed->value.floatValues[0], 20.0f, 0.01f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, ConfigCanIdReroutesDecode) {
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_ID_CONTROLLER_STATUS, 0x123)),
+              StatusCode::OK);
+    clearEvents();
+
+    // Old ID is now unknown: no RPM event
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x20, 0xB8, 0x0B, 0x00, 0x00, 0x00, 0x00}));
+    EXPECT_EQ(countEvents(PROP_ENGINE_RPM), 0u);
+
+    // New ID decodes (interface flag doesn't matter, only the ID)
+    mPeer->processCanFrame(makeFrame(0x123, false,
+                                     {0x00, 0x20, 0xD2, 0x04, 0x00, 0x00, 0x00, 0x00}));
+    auto rpm = lastEvent(PROP_ENGINE_RPM);
+    ASSERT_TRUE(rpm.has_value());
+    EXPECT_FLOAT_EQ(rpm->value.floatValues[0], 1234.0f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, ConfigValidationRejectsBadValues) {
+    // Out of range
+    EXPECT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_WHEEL_CIRCUMFERENCE, 9.0f)),
+              StatusCode::INVALID_ARG);
+    EXPECT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_GEAR_RATIO, 0.1f)),
+              StatusCode::INVALID_ARG);
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_ID_BMS, 0)),
+              StatusCode::INVALID_ARG);
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_GPIO_LEFT_TURN, 99)),
+              StatusCode::INVALID_ARG);
+    // Wrong value type
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_WHEEL_CIRCUMFERENCE, 2)),
+              StatusCode::INVALID_ARG);
+    // Non-config properties stay read-only
+    EXPECT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_BATTERY_VOLTAGE, 80.0f)),
+              StatusCode::ACCESS_DENIED);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, GearChangeNotifiesOnlyOnChange) {
+    auto driveFrame = makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                {0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+    mPeer->processCanFrame(driveFrame);
+    mPeer->processCanFrame(driveFrame);
+    EXPECT_EQ(countEvents(PROP_CURRENT_GEAR), 1u);
+
+    // Back to neutral (bits 4-7 = 2)
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
+    EXPECT_EQ(countEvents(PROP_CURRENT_GEAR), 2u);
+    auto gear = lastEvent(PROP_CURRENT_GEAR);
+    EXPECT_EQ(gear->value.int32Values[0], static_cast<int32_t>(VehicleGear::GEAR_NEUTRAL));
+}
+
+}  // namespace
+}  // namespace android::hardware::automotive::vehicle::motorcycle

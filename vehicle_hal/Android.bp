@@ -10,6 +10,9 @@ package {
 cc_library_static {
     name: "MotorcycleVehicleHardware",
     vendor: true,
+    // Host variant: lets the decode logic run in host unit tests and the
+    // vcan replay tool without flashing a device (see tests/TESTING.md).
+    host_supported: true,
     defaults: [
         "VehicleHalDefaults",
     ],
@@ -50,5 +53,66 @@ cc_binary {
     ],
     shared_libs: [
         "libbinder_ndk",
+    ],
+}
+
+// Host-side unit tests for the CAN decode and config logic.
+// Run: atest --host motorcycle_vhal_test
+cc_test {
+    name: "motorcycle_vhal_test",
+    host_supported: true,
+    device_supported: false,
+    defaults: ["VehicleHalDefaults"],
+    srcs: ["tests/MotorcycleVehicleHardwareTest.cpp"],
+    static_libs: [
+        "MotorcycleVehicleHardware",
+        "VehicleHalUtils",
+    ],
+    header_libs: [
+        "IVehicleHardware",
+    ],
+    shared_libs: [
+        "libbinder_ndk",
+        "libcutils",
+    ],
+    test_suites: ["general-tests"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+// Host replay tool: runs the real HAL decode stack against a local vcan
+// interface so captured bus traffic can be replayed on the dev machine.
+// See tests/TESTING.md.
+cc_binary {
+    name: "motorcycle_vhal_replay",
+    host_supported: true,
+    device_supported: false,
+    defaults: ["VehicleHalDefaults"],
+    srcs: ["tests/VhalReplayTool.cpp"],
+    static_libs: [
+        "MotorcycleVehicleHardware",
+        "VehicleHalUtils",
+    ],
+    header_libs: [
+        "IVehicleHardware",
+    ],
+    shared_libs: [
+        "libbinder_ndk",
+        "libcutils",
+    ],
+}
+
+// CAN frame sender/replayer for simulator and bench testing (the platform
+// image has no can-utils). Host variant included for symmetry with vcan on
+// the dev machine.
+cc_binary {
+    name: "moto_can_replay",
+    vendor: true,
+    host_supported: true,
+    srcs: ["tests/CanReplayer.cpp"],
+    cflags: [
+        "-Wall",
+        "-Werror",
     ],
 }
