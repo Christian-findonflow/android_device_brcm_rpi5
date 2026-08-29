@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Overlay for 800x480 7-inch motorcycle dashboard screen -->
+<resources>
+    <!-- Reduce app grid dimensions for smaller screen -->
+    <dimen name="app_grid_width">560dp</dimen>
+    <dimen name="app_grid_height">320dp</dimen>
+    
+    <!-- Smaller minimum column size to fit more apps (3 columns) -->
+    <dimen name="car_app_selector_column_min_width">140dp</dimen>
+    <dimen name="car_app_selector_column_min_height">120dp</dimen>
+    
+    <!-- Reduce margins for compact layout -->
+    <dimen name="app_grid_margin_horizontal">16dp</dimen>
+    <dimen name="app_grid_margin_vertical">8dp</dimen>
+    
+    <!-- Smaller app icons -->
+    <dimen name="app_icon_size">48dp</dimen>
+    <dimen name="app_icon_scaled_size">56dp</dimen>
+    
+    <!-- Reduce other spacing -->
+    <dimen name="app_grid_header_margin">8dp</dimen>
+    <dimen name="panel_margin">8dp</dimen>
+    <dimen name="app_bar_height">48dp</dimen>
+    <dimen name="icon_size">40dp</dimen>
+    <dimen name="app_grid_touch_target_size">52dp</dimen>
+    <dimen name="app_touch_target_padding">8dp</dimen>
+    <dimen name="app_touch_target_margin">4dp</dimen>
+    <dimen name="app_grid_row_margin">12dp</dimen>
+    <dimen name="app_icon_description_margin">8dp</dimen>
+</resources>

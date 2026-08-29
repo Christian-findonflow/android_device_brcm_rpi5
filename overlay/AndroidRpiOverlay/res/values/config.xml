@@ -136,4 +136,15 @@
 
     <string name="config_deviceSpecificDisplayAreaPolicyProvider" translatable="false">com.android.server.wm.CarDisplayAreaPolicyProvider</string>
 
+    <!-- Prevent the whole-screen slide when switching apps in the split display.
+         Verified on Android 16 (shell transitions): config_disableTransitionAnimation
+         alone does NOT suppress the slide; the effective mechanism is the
+         transition/window animation *scales*, defaulted to 0 here and in
+         SettingsProviderRpiOverlay. animator_duration_scale stays 1.0 so in-app
+         animations keep working (zeroing config_*AnimTime broke them - abrupt
+         jumps; some code divides by those durations). Scales remain
+         user-adjustable in developer options. -->
+    <bool name="config_disableTransitionAnimation">true</bool>
+    <item name="config_appTransitionAnimationDurationScaleDefault" format="float" type="dimen">0.0</item>
+
 </resources>

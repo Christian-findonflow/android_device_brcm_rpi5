@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pre-grant runtime permissions to the bundled dashboard apps: a rider
+     cannot answer permission dialogs, so the vehicle image ships them
+     granted (fixed="false" keeps them user-revocable in Settings). -->
+<exceptions>
+    <exception package="com.android.car.media.localmediaplayer">
+        <permission name="android.permission.READ_EXTERNAL_STORAGE" fixed="false"/>
+        <permission name="android.permission.POST_NOTIFICATIONS" fixed="false"/>
+    </exception>
+    <exception package="net.osmand">
+        <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false"/>
+        <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false"/>
+        <permission name="android.permission.POST_NOTIFICATIONS" fixed="false"/>
+    </exception>
+</exceptions>

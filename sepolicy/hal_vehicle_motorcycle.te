@@ -14,3 +14,7 @@ allow hal_can_socketcan sysfs_gpio:file rw_file_perms;
 
 # Allow reading vendor properties for GPIO configuration
 get_prop(hal_can_socketcan, vendor_default_prop)
+
+# Allow reading and persisting motodash configuration properties
+# (set_prop implies get_prop)
+set_prop(hal_can_socketcan, vendor_motodash_prop)

@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 
@@ -67,6 +68,7 @@ constexpr uint16_t BMS_PID_CHARGE_LIMIT = 0xF00A;          // Charge current lim
 constexpr uint16_t BMS_PID_DISCHARGE_LIMIT = 0xF00B;       // Discharge current limit (A)
 constexpr uint16_t BMS_PID_PACK_AMPHOURS = 0xF010;         // Pack Ah (0.1Ah)
 constexpr uint16_t BMS_PID_PACK_RESISTANCE = 0xF011;       // Pack resistance (0.01mOhm)
+constexpr uint16_t BMS_PID_PACK_DOD = 0xF012;              // Depth of discharge (0.5%)
 
 // Vendor-specific property IDs for motorcycle data
 // Format: 0x2[area_type][value_type][property_id]
@@ -93,6 +95,29 @@ constexpr int32_t VENDOR_CELL_LOW_ID = 0x2150001C;         // Low cell ID (int)
 constexpr int32_t VENDOR_CELL_HIGH_ID = 0x2150001D;        // High cell ID (int)
 constexpr int32_t VENDOR_FAN_SPEED = 0x2150001E;           // Fan speed 0-6 (int)
 constexpr int32_t VENDOR_HEATSINK_TEMP = 0x2160001F;       // Heatsink temperature (°C)
+constexpr int32_t VENDOR_PACK_DOD = 0x21600020;            // Depth of discharge (%)
+
+// Writable configuration properties. Set from the dashboard settings UI via
+// CarPropertyManager (requires android.car.permission.CAR_VENDOR_EXTENSION);
+// the HAL validates, applies, and persists them to persist.vendor.motodash.cfg.*.
+// Value type nibble: 6 = FLOAT, 4 = INT32.
+constexpr int32_t VENDOR_CFG_WHEEL_CIRCUMFERENCE = 0x21600030;   // meters (applies live)
+constexpr int32_t VENDOR_CFG_GEAR_RATIO = 0x21600031;            // motor rev / wheel rev (applies live)
+constexpr int32_t VENDOR_CFG_CAN_ID_CONTROLLER_STATUS = 0x21400032;  // CAN ID (applies live)
+constexpr int32_t VENDOR_CFG_CAN_ID_CONTROLLER_TEMPS = 0x21400033;   // CAN ID (applies live)
+constexpr int32_t VENDOR_CFG_CAN_ID_BMS = 0x21400034;                // CAN ID (applies live)
+constexpr int32_t VENDOR_CFG_GPIO_LEFT_TURN = 0x21400035;    // BCM pin, -1 = disabled (needs reboot)
+constexpr int32_t VENDOR_CFG_GPIO_RIGHT_TURN = 0x21400036;   // BCM pin, -1 = disabled (needs reboot)
+constexpr int32_t VENDOR_CFG_GPIO_HIGH_BEAM = 0x21400037;    // BCM pin, -1 = disabled (needs reboot)
+constexpr int32_t VENDOR_CFG_GPIO_ACTIVE_LOW = 0x21400038;   // 0/1 (applies live)
+
+// Validation limits for writable configuration
+constexpr float CFG_MIN_WHEEL_CIRCUMFERENCE_M = 0.5f;
+constexpr float CFG_MAX_WHEEL_CIRCUMFERENCE_M = 5.0f;
+constexpr float CFG_MIN_GEAR_RATIO = 0.5f;
+constexpr float CFG_MAX_GEAR_RATIO = 30.0f;
+constexpr int32_t CFG_MAX_CAN_ID = 0x1FFFFFFF;  // 29-bit extended ID space
+constexpr int32_t CFG_MAX_GPIO_PIN = 27;        // RPi header BCM pins
 
 // GPIO configuration (BCM pin numbers, -1 = disabled)
 constexpr int GPIO_PIN_LEFT_TURN = -1;   // Will be read from system property
@@ -108,7 +133,10 @@ constexpr int GEAR_DRIVE = 3;
 
 class MotorcycleVehicleHardware : public IVehicleHardware {
   public:
-    MotorcycleVehicleHardware();
+    // canInterfaceOverride: when non-empty, use this CAN interface instead of
+    // the persist.vendor.motodash.can_interface property. Used by host-side
+    // tests and the replay tool (e.g. "vcan0").
+    explicit MotorcycleVehicleHardware(std::string canInterfaceOverride = "");
     ~MotorcycleVehicleHardware() override;
 
     std::vector<VehiclePropConfig> getAllPropertyConfigs() const override;
@@ -133,6 +161,10 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     StatusCode unsubscribe(int32_t propId, int32_t areaId) override;
 
   private:
+    // Test accessor: lets host-side unit tests drive private decode paths
+    // (tests/MotorcycleVehicleHardwareTest.cpp) without a live CAN bus.
+    friend class MotorcycleVehicleHardwareTestPeer;
+
     void initPropertyConfigs();
     bool openCanSocket();
     void canReaderThread();
@@ -148,8 +180,12 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void updateBmsProperty(int32_t propId, float value);
     void updateBmsPropertyInt(int32_t propId, int32_t value);
     
+    // Configuration (CAN IDs, speed parameters, GPIO pins)
+    void loadConfig();
+    StatusCode applyConfigValue(const VehiclePropValue& value);
+    void persistConfig(const char* name, const std::string& value);
+
     // GPIO functions
-    void loadGpioConfig();
     bool openGpioChip();
     void gpioReaderThread();
     void updateTurnSignalState(int state);
@@ -182,13 +218,24 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int mGpioLeftTurnPin = -1;
     int mGpioRightTurnPin = -1;
     int mGpioHighBeamPin = -1;
-    bool mGpioActiveLow = true;
+    std::atomic<bool> mGpioActiveLow{true};
     std::thread mGpioReaderThread;
+    
+    // CAN interface name (configurable via system property, default: can1)
+    std::string mCanInterface = "can1";
 
-    // Vehicle parameters for speed calculation
-    static constexpr float WHEEL_CIRCUMFERENCE_M = 1.894f;  // meters
-    static constexpr float GEAR_RATIO = 4.0f;
-    static constexpr float RPM_TO_MPS = WHEEL_CIRCUMFERENCE_M / (GEAR_RATIO * 60.0f);
+    // Vehicle parameters for speed calculation (defaults; runtime values are
+    // configurable via the VENDOR_CFG_* properties)
+    static constexpr float DEFAULT_WHEEL_CIRCUMFERENCE_M = 1.894f;  // 17" wheel, 120/70 tire
+    static constexpr float DEFAULT_GEAR_RATIO = 4.0f;
+
+    // Runtime-configurable decode parameters. Atomics: the CAN reader thread
+    // reads them per frame while binder threads may update them via setValues.
+    std::atomic<uint32_t> mCanIdControllerStatus{CAN_ID_CONTROLLER_STATUS};
+    std::atomic<uint32_t> mCanIdControllerTemps{CAN_ID_CONTROLLER_TEMPS};
+    std::atomic<uint32_t> mCanIdBms{CAN_ID_BMS};
+    std::atomic<float> mWheelCircumference{DEFAULT_WHEEL_CIRCUMFERENCE_M};
+    std::atomic<float> mGearRatio{DEFAULT_GEAR_RATIO};
 };
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle

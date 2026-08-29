@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <cstdlib>
 #include <cstring>
 #include <chrono>
 #include <thread>
@@ -30,11 +31,15 @@ using ::aidl::android::hardware::automotive::vehicle::VehicleGear;
 using ::aidl::android::hardware::automotive::vehicle::VehiclePropertyType;
 using ::aidl::android::hardware::automotive::vehicle::VehicleUnit;
 
-MotorcycleVehicleHardware::MotorcycleVehicleHardware() {
+MotorcycleVehicleHardware::MotorcycleVehicleHardware(std::string canInterfaceOverride) {
     LOG(INFO) << "MotorcycleVehicleHardware initializing...";
     
-    // Load GPIO configuration from system properties
-    loadGpioConfig();
+    // Load persisted configuration (CAN IDs, speed parameters, GPIO pins)
+    loadConfig();
+    if (!canInterfaceOverride.empty()) {
+        mCanInterface = std::move(canInterfaceOverride);
+        LOG(INFO) << "CAN interface overridden: " << mCanInterface;
+    }
     
     initPropertyConfigs();
     
@@ -447,6 +452,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
 
     // Pack health and capacity
     addFloatVendorProp(VENDOR_PACK_SOH, 0.0f, 100.0f, 100.0f);           // State of Health %
+    addFloatVendorProp(VENDOR_PACK_DOD, 0.0f, 100.0f, 0.0f);             // Depth of Discharge %
     addFloatVendorProp(VENDOR_PACK_AMPHOURS, 0.0f, 500.0f, 100.0f);      // Capacity Ah
     addFloatVendorProp(VENDOR_PACK_RESISTANCE, 0.0f, 1000.0f, 0.0f);     // Resistance mOhm
     addIntVendorProp(VENDOR_PACK_CYCLES, 0);                             // Cycle count
@@ -469,6 +475,45 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addFloatVendorProp(VENDOR_CHARGE_LIMIT, 0.0f, 500.0f, 0.0f);         // Charge limit A
     addFloatVendorProp(VENDOR_DISCHARGE_LIMIT, 0.0f, 500.0f, 0.0f);      // Discharge limit A
 
+    // Writable configuration properties (see VENDOR_CFG_* in the header).
+    // Registered with the values loaded from persist.vendor.motodash.* so the
+    // settings UI reads back the current configuration.
+    auto addConfigProp = [this](int32_t propId, bool isFloat, float floatVal, int32_t intVal) {
+        VehiclePropConfig config;
+        config.prop = propId;
+        config.access = VehiclePropertyAccess::READ_WRITE;
+        config.changeMode = VehiclePropertyChangeMode::ON_CHANGE;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        areaConfig.access = VehiclePropertyAccess::READ_WRITE;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+
+        VehiclePropValue value;
+        value.prop = propId;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        if (isFloat) {
+            value.value.floatValues.push_back(floatVal);
+        } else {
+            value.value.int32Values.push_back(intVal);
+        }
+        mCurrentValues[propId] = value;
+    };
+
+    addConfigProp(VENDOR_CFG_WHEEL_CIRCUMFERENCE, true, mWheelCircumference.load(), 0);
+    addConfigProp(VENDOR_CFG_GEAR_RATIO, true, mGearRatio.load(), 0);
+    addConfigProp(VENDOR_CFG_CAN_ID_CONTROLLER_STATUS, false, 0.0f,
+                  static_cast<int32_t>(mCanIdControllerStatus.load()));
+    addConfigProp(VENDOR_CFG_CAN_ID_CONTROLLER_TEMPS, false, 0.0f,
+                  static_cast<int32_t>(mCanIdControllerTemps.load()));
+    addConfigProp(VENDOR_CFG_CAN_ID_BMS, false, 0.0f,
+                  static_cast<int32_t>(mCanIdBms.load()));
+    addConfigProp(VENDOR_CFG_GPIO_LEFT_TURN, false, 0.0f, mGpioLeftTurnPin);
+    addConfigProp(VENDOR_CFG_GPIO_RIGHT_TURN, false, 0.0f, mGpioRightTurnPin);
+    addConfigProp(VENDOR_CFG_GPIO_HIGH_BEAM, false, 0.0f, mGpioHighBeamPin);
+    addConfigProp(VENDOR_CFG_GPIO_ACTIVE_LOW, false, 0.0f, mGpioActiveLow.load() ? 1 : 0);
+
     LOG(INFO) << "Initialized " << mPropertyConfigs.size() << " property configs";
 }
 
@@ -481,10 +526,10 @@ bool MotorcycleVehicleHardware::openCanSocket() {
 
     struct ifreq ifr;
     std::memset(&ifr, 0, sizeof(ifr));
-    std::strncpy(ifr.ifr_name, "can0", IFNAMSIZ - 1);
+    std::strncpy(ifr.ifr_name, mCanInterface.c_str(), IFNAMSIZ - 1);
 
     if (ioctl(mCanSocket, SIOCGIFINDEX, &ifr) < 0) {
-        LOG(ERROR) << "Failed to get interface index for can0: " << strerror(errno);
+        LOG(ERROR) << "Failed to get interface index for " << mCanInterface << ": " << strerror(errno);
         close(mCanSocket);
         mCanSocket = -1;
         return false;
@@ -502,7 +547,7 @@ bool MotorcycleVehicleHardware::openCanSocket() {
         return false;
     }
 
-    LOG(INFO) << "CAN socket opened on can0 (ifindex=" << ifr.ifr_ifindex << ")";
+    LOG(INFO) << "CAN socket opened on " << mCanInterface << " (ifindex=" << ifr.ifr_ifindex << ")";
     return true;
 }
 
@@ -553,43 +598,77 @@ void MotorcycleVehicleHardware::canReaderThread() {
     LOG(INFO) << "CAN reader thread exiting, total frames=" << frameCount;
 }
 
+namespace {
+// Rate-limited logging of CAN IDs we don't decode. Bounded so a noisy or
+// corrupted bus cannot grow the map without limit on the reader thread.
+void logUnknownCanId(uint32_t canId, bool isExtended, const uint8_t* data) {
+    static std::unordered_map<uint32_t, int> unknownIds;
+    constexpr size_t kMaxTrackedIds = 64;
+    if (unknownIds.size() >= kMaxTrackedIds && unknownIds.find(canId) == unknownIds.end()) {
+        return;  // Too many distinct unknown IDs; stop tracking new ones.
+    }
+    if (++unknownIds[canId] % 100 == 1) {
+        LOG(INFO) << "Unknown " << (isExtended ? "extended" : "standard")
+                  << " CAN ID 0x" << std::hex << canId << std::dec
+                  << " data=[" << (int)data[0] << "," << (int)data[1] << ","
+                  << (int)data[2] << "," << (int)data[3] << ","
+                  << (int)data[4] << "," << (int)data[5] << ","
+                  << (int)data[6] << "," << (int)data[7] << "]";
+    }
+}
+}  // namespace
+
 void MotorcycleVehicleHardware::processCanFrame(const struct can_frame& frame) {
     uint32_t canId = frame.can_id & CAN_EFF_MASK;
     bool isExtended = (frame.can_id & CAN_EFF_FLAG) != 0;
 
-    if (isExtended) {
-        if (canId == CAN_ID_CONTROLLER_STATUS) {
-            processControllerStatus(frame.data);
-        } else if (canId == CAN_ID_CONTROLLER_TEMPS) {
-            processControllerTemps(frame.data);
-        }
+    // Compare against the configured (runtime-changeable) message IDs.
+    if (canId == mCanIdControllerStatus.load(std::memory_order_relaxed)) {
+        processControllerStatus(frame.data);
+    } else if (canId == mCanIdControllerTemps.load(std::memory_order_relaxed)) {
+        processControllerTemps(frame.data);
+    } else if (canId == mCanIdBms.load(std::memory_order_relaxed)) {
+        processBmsData(frame.data);
+    } else if (!isExtended && canId == CAN_ID_OBD2_RESPONSE) {
+        // OBD2 response from BMS
+        processObd2Response(frame.data, frame.can_dlc);
     } else {
-        if (canId == CAN_ID_BMS) {
-            processBmsData(frame.data);
-        } else if (canId == CAN_ID_OBD2_RESPONSE) {
-            // OBD2 response from BMS
-            processObd2Response(frame.data, frame.can_dlc);
-        }
+        logUnknownCanId(canId, isExtended, frame.data);
     }
 }
 
 void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
-    // Byte 0-1: RPM (little-endian)
-    int rpm = data[0] | (data[1] << 8);
+    // Message 0x10261022 format (from controller spec):
+    // Byte 0: Error Codes (bitfield)
+    // Byte 1: Status Flags (bits 0-3) & Gear (bits 4-7: 00=P, 01=R, 10=N, 11=D)
+    // Bytes 2-3: RPM (UINT16 little-endian, 1 rpm/bit)
+    // Bytes 4-5: Battery Voltage (UINT16 little-endian, 0.1 V/bit)
+    // Bytes 6-7: Battery Current (UINT16 little-endian, 0.1 A/bit)
     
-    // Byte 2: Gear (0=P, 1=R, 2=N, 3=D)
-    int gear = data[2];
-    
-    // Byte 3-4: Battery voltage (0.1V resolution)
-    int voltageRaw = data[3] | (data[4] << 8);
+    int errors = data[0];
+    int statusAndGear = data[1];
+    int gearRaw = (statusAndGear >> 4) & 0x0F;  // Bits 4-7 for gear
+    int rpm = data[2] | (data[3] << 8);
+    int voltageRaw = data[4] | (data[5] << 8);
     float voltage = voltageRaw * 0.1f;
+    // Current is signed 16-bit (negative = regen/charging, positive = discharge)
+    int16_t currentRaw = static_cast<int16_t>(data[6] | (data[7] << 8));
+    float current = currentRaw * 0.1f;
     
-    // Byte 5-6: Battery current (0.1A resolution, offset by 320A)
-    int currentRaw = data[5] | (data[6] << 8);
-    float current = (currentRaw - 3200) * 0.1f;
+    // Map gear: 00=P(0), 01=R(1), 10=N(2), 11=D(3)
+    int gear = gearRaw;
     
-    // Byte 7: Error codes
-    // int errors = data[7];
+    // Debug logging
+    static int statusMsgCount = 0;
+    if (++statusMsgCount % 10 == 1) {
+        LOG(INFO) << "Controller 0x10261022: data[0-7]=" 
+                  << (int)data[0] << "," << (int)data[1] << "," 
+                  << (int)data[2] << "," << (int)data[3] << ","
+                  << (int)data[4] << "," << (int)data[5] << ","
+                  << (int)data[6] << "," << (int)data[7]
+                  << " -> errors=" << errors << " gear=" << gear 
+                  << " rpm=" << rpm << " V=" << voltage << " A=" << current;
+    }
 
     int64_t timestamp = elapsedRealtimeNano();
 
@@ -618,6 +697,8 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
         std::lock_guard<std::mutex> lock(mValuesMutex);
         auto& gearValue = mCurrentValues[static_cast<int32_t>(VehicleProperty::CURRENT_GEAR)];
         if (gearValue.value.int32Values[0] != vehicleGear) {
+            LOG(INFO) << "Gear change: raw=" << gear << " mapped=" << vehicleGear 
+                      << " (prev=" << gearValue.value.int32Values[0] << ")";
             gearValue.value.int32Values[0] = vehicleGear;
             gearValue.timestamp = timestamp;
             notifyPropertyChange(static_cast<int32_t>(VehicleProperty::CURRENT_GEAR), gearValue);
@@ -659,14 +740,29 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
 }
 
 void MotorcycleVehicleHardware::processControllerTemps(const uint8_t* data) {
-    // Byte 0: Controller temperature (°C)
+    // Message 0x10261023 format (from controller spec):
+    // Byte 0: Controller Temperature (°C)
+    // Byte 1: Motor Temperature (°C)
+    // Byte 3: HALL status (bitfield)
+    // Byte 4: Throttle Signal (0-100%)
+    // Byte 6: Error Codes (bitfield)
+    
     int controllerTemp = data[0];
-    
-    // Byte 1: Motor temperature (°C)
     int motorTemp = data[1];
-    
-    // Byte 2: Throttle (%)
-    int throttle = data[2];
+    int throttle = data[4];  // Byte 4, not byte 2!
+    int tempErrors = data[6];
+
+    // Debug logging
+    static int tempsMsgCount = 0;
+    if (++tempsMsgCount % 10 == 1) {
+        LOG(INFO) << "Controller 0x10261023 temps: data=[" 
+                  << (int)data[0] << "," << (int)data[1] << ","
+                  << (int)data[2] << "," << (int)data[3] << ","
+                  << (int)data[4] << "," << (int)data[5] << ","
+                  << (int)data[6] << "," << (int)data[7] << "]"
+                  << " -> ctrlTemp=" << controllerTemp << " motorTemp=" << motorTemp
+                  << " throttle=" << throttle << " errors=" << tempErrors;
+    }
 
     int64_t timestamp = elapsedRealtimeNano();
 
@@ -699,35 +795,49 @@ void MotorcycleVehicleHardware::processControllerTemps(const uint8_t* data) {
 }
 
 void MotorcycleVehicleHardware::processBmsData(const uint8_t* data) {
-    // BMS broadcast message 0x6B1 (from Neo CAN Matrix)
-    // Byte 0: Amphours remaining
-    int amphours = data[0];
+    // BMS broadcast message 0x6B1 - based on OBSERVED data pattern:
+    // Raw: [0,99,0,18,3,2,0,51]
+    // The spec says byte0=Ah, byte1=Temp, byte2=SOC but observed data doesn't match.
+    // Observed: byte3=SOC (17-18%), byte7=Temp (raw value, needs -40 offset like OBD2)
+    // Byte 1 (99) might be voltage or something else
     
-    // Byte 1: Battery temperature (°C)
-    int batteryTemp = data[1];
-    
-    // Byte 2: State of Charge (%)
-    int soc = data[2];
+    int soc = data[3];           // Observed: 17-18% matches expected
+    // Apply -40 offset like Orion BMS OBD2 temps (range -40 to 80°C)
+    int batteryTemp = static_cast<int>(data[7]) - 40;
+    // int amphours = data[0];   // Always 0 in observed data
 
     int64_t timestamp = elapsedRealtimeNano();
+    
+    static int bmsMsgCount = 0;
+    if (++bmsMsgCount % 10 == 1) {
+        LOG(INFO) << "BMS 0x6B1 raw: [" << (int)data[0] << "," << (int)data[1] << "," 
+                  << (int)data[2] << "," << (int)data[3] << "," << (int)data[4] << ","
+                  << (int)data[5] << "," << (int)data[6] << "," << (int)data[7] << "]"
+                  << " -> SOC=" << soc << "% Temp=" << batteryTemp << "°C (raw=" << (int)data[7] << ")";
+    }
 
     // Update Battery SoC
     {
         std::lock_guard<std::mutex> lock(mValuesMutex);
         auto& value = mCurrentValues[static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL)];
+        float prevSoc = value.value.floatValues[0];
         value.value.floatValues[0] = static_cast<float>(soc);
         value.timestamp = timestamp;
+        if (prevSoc != static_cast<float>(soc)) {
+            LOG(INFO) << "Battery SOC changed: " << prevSoc << " -> " << soc;
+        }
         notifyPropertyChange(static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL), value);
     }
 
-    // Update Pack Amphours
-    {
-        std::lock_guard<std::mutex> lock(mValuesMutex);
-        auto& value = mCurrentValues[VENDOR_PACK_AMPHOURS];
-        value.value.floatValues[0] = static_cast<float>(amphours);
-        value.timestamp = timestamp;
-        notifyPropertyChange(VENDOR_PACK_AMPHOURS, value);
-    }
+    // Update Pack Amphours - disabled, broadcast data doesn't match spec
+    // Will get from OBD2 PID 0xF010 instead
+    // {
+    //     std::lock_guard<std::mutex> lock(mValuesMutex);
+    //     auto& value = mCurrentValues[VENDOR_PACK_AMPHOURS];
+    //     value.value.floatValues[0] = static_cast<float>(amphours);
+    //     value.timestamp = timestamp;
+    //     notifyPropertyChange(VENDOR_PACK_AMPHOURS, value);
+    // }
 
     // Update Pack Temperature (use as average temp from BMS broadcast)
     {
@@ -827,9 +937,16 @@ void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t
     // Parse response based on PID
     switch (pid) {
         case BMS_PID_PACK_SOH: {
-            // 1 byte, direct percentage
+            // 1 byte, direct percentage (no scaling per Orion spec)
             if (dataLen >= 1) {
                 updateBmsProperty(VENDOR_PACK_SOH, static_cast<float>(data[4]));
+            }
+            break;
+        }
+        case BMS_PID_PACK_DOD: {
+            // 1 byte, 0.5% scaling per Orion spec
+            if (dataLen >= 1) {
+                updateBmsProperty(VENDOR_PACK_DOD, static_cast<float>(data[4]) * 0.5f);
             }
             break;
         }
@@ -842,7 +959,7 @@ void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t
             break;
         }
         case BMS_PID_TEMP_HIGH: {
-            // 1 byte, °C with -40 offset
+            // 1 byte, range -40 to 80°C (Orion BMS spec)
             if (dataLen >= 1) {
                 updateBmsProperty(VENDOR_PACK_TEMP_HIGH, static_cast<float>(data[4]) - 40.0f);
             }
@@ -960,6 +1077,7 @@ void MotorcycleVehicleHardware::bmsPollingThread() {
     // List of PIDs to poll (slower-changing data)
     const std::vector<uint16_t> pollPids = {
         BMS_PID_PACK_SOH,
+        BMS_PID_PACK_DOD,
         BMS_PID_PACK_CYCLES,
         BMS_PID_TEMP_HIGH,
         BMS_PID_TEMP_LOW,
@@ -993,8 +1111,8 @@ void MotorcycleVehicleHardware::bmsPollingThread() {
         // Move to next PID
         pidIndex = (pidIndex + 1) % pollPids.size();
         
-        // Delay between requests (100ms between each, full cycle ~1.6s)
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Delay between requests (5s between each - this data changes slowly)
+        std::this_thread::sleep_for(std::chrono::seconds(5));
     }
     
     LOG(INFO) << "BMS polling thread exiting";
@@ -1002,7 +1120,8 @@ void MotorcycleVehicleHardware::bmsPollingThread() {
 
 float MotorcycleVehicleHardware::calculateSpeedFromRpm(int rpm) const {
     // Speed (m/s) = RPM * wheel_circumference / (gear_ratio * 60)
-    return static_cast<float>(rpm) * RPM_TO_MPS;
+    return static_cast<float>(rpm) * mWheelCircumference.load(std::memory_order_relaxed) /
+           (mGearRatio.load(std::memory_order_relaxed) * 60.0f);
 }
 
 int MotorcycleVehicleHardware::mapGearToVehicleGear(int controllerGear) const {
@@ -1049,16 +1168,128 @@ std::vector<VehiclePropConfig> MotorcycleVehicleHardware::getAllPropertyConfigs(
 StatusCode MotorcycleVehicleHardware::setValues(
         std::shared_ptr<const SetValuesCallback> callback,
         const std::vector<SetValueRequest>& requests) {
-    // Most properties are read-only from CAN
+    // Only the VENDOR_CFG_* configuration properties are writable;
+    // everything else is read-only data from the CAN bus.
     std::vector<SetValueResult> results;
     for (const auto& request : requests) {
         SetValueResult result;
         result.requestId = request.requestId;
-        result.status = StatusCode::ACCESS_DENIED;
+        result.status = applyConfigValue(request.value);
         results.push_back(result);
     }
     (*callback)(results);
     return StatusCode::OK;
+}
+
+StatusCode MotorcycleVehicleHardware::applyConfigValue(const VehiclePropValue& value) {
+    const int32_t propId = value.prop;
+
+    auto floatArg = [&value](float min, float max, float* out) {
+        if (value.value.floatValues.size() != 1) return false;
+        float v = value.value.floatValues[0];
+        if (v < min || v > max) return false;
+        *out = v;
+        return true;
+    };
+    auto intArg = [&value](int32_t min, int32_t max, int32_t* out) {
+        if (value.value.int32Values.size() != 1) return false;
+        int32_t v = value.value.int32Values[0];
+        if (v < min || v > max) return false;
+        *out = v;
+        return true;
+    };
+
+    switch (propId) {
+        case VENDOR_CFG_WHEEL_CIRCUMFERENCE: {
+            float v;
+            if (!floatArg(CFG_MIN_WHEEL_CIRCUMFERENCE_M, CFG_MAX_WHEEL_CIRCUMFERENCE_M, &v)) {
+                return StatusCode::INVALID_ARG;
+            }
+            mWheelCircumference = v;
+            persistConfig("persist.vendor.motodash.cfg.wheel_circumference", std::to_string(v));
+            break;
+        }
+        case VENDOR_CFG_GEAR_RATIO: {
+            float v;
+            if (!floatArg(CFG_MIN_GEAR_RATIO, CFG_MAX_GEAR_RATIO, &v)) {
+                return StatusCode::INVALID_ARG;
+            }
+            mGearRatio = v;
+            persistConfig("persist.vendor.motodash.cfg.gear_ratio", std::to_string(v));
+            break;
+        }
+        case VENDOR_CFG_CAN_ID_CONTROLLER_STATUS: {
+            int32_t v;
+            if (!intArg(1, CFG_MAX_CAN_ID, &v)) return StatusCode::INVALID_ARG;
+            mCanIdControllerStatus = static_cast<uint32_t>(v);
+            persistConfig("persist.vendor.motodash.cfg.can_id_controller_status", std::to_string(v));
+            break;
+        }
+        case VENDOR_CFG_CAN_ID_CONTROLLER_TEMPS: {
+            int32_t v;
+            if (!intArg(1, CFG_MAX_CAN_ID, &v)) return StatusCode::INVALID_ARG;
+            mCanIdControllerTemps = static_cast<uint32_t>(v);
+            persistConfig("persist.vendor.motodash.cfg.can_id_controller_temps", std::to_string(v));
+            break;
+        }
+        case VENDOR_CFG_CAN_ID_BMS: {
+            int32_t v;
+            if (!intArg(1, CFG_MAX_CAN_ID, &v)) return StatusCode::INVALID_ARG;
+            mCanIdBms = static_cast<uint32_t>(v);
+            persistConfig("persist.vendor.motodash.cfg.can_id_bms", std::to_string(v));
+            break;
+        }
+        case VENDOR_CFG_GPIO_LEFT_TURN: {
+            int32_t v;
+            if (!intArg(-1, CFG_MAX_GPIO_PIN, &v)) return StatusCode::INVALID_ARG;
+            mGpioLeftTurnPin = v;  // GPIO lines are requested at startup; new pin applies on next boot
+            persistConfig("persist.vendor.motodash.gpio.left_turn", std::to_string(v));
+            break;
+        }
+        case VENDOR_CFG_GPIO_RIGHT_TURN: {
+            int32_t v;
+            if (!intArg(-1, CFG_MAX_GPIO_PIN, &v)) return StatusCode::INVALID_ARG;
+            mGpioRightTurnPin = v;
+            persistConfig("persist.vendor.motodash.gpio.right_turn", std::to_string(v));
+            break;
+        }
+        case VENDOR_CFG_GPIO_HIGH_BEAM: {
+            int32_t v;
+            if (!intArg(-1, CFG_MAX_GPIO_PIN, &v)) return StatusCode::INVALID_ARG;
+            mGpioHighBeamPin = v;
+            persistConfig("persist.vendor.motodash.gpio.high_beam", std::to_string(v));
+            break;
+        }
+        case VENDOR_CFG_GPIO_ACTIVE_LOW: {
+            int32_t v;
+            if (!intArg(0, 1, &v)) return StatusCode::INVALID_ARG;
+            mGpioActiveLow = (v != 0);
+            persistConfig("persist.vendor.motodash.gpio.active_low", std::to_string(v));
+            break;
+        }
+        default:
+            return StatusCode::ACCESS_DENIED;
+    }
+
+    LOG(INFO) << "Config property 0x" << std::hex << propId << std::dec << " updated";
+
+    // Store the new value and notify subscribers so settings UIs stay in sync.
+    {
+        std::lock_guard<std::mutex> lock(mValuesMutex);
+        auto& stored = mCurrentValues[propId];
+        stored.prop = propId;
+        stored.areaId = 0;
+        stored.value = value.value;
+        stored.timestamp = elapsedRealtimeNano();
+        notifyPropertyChange(propId, stored);
+    }
+    return StatusCode::OK;
+}
+
+void MotorcycleVehicleHardware::persistConfig(const char* name, const std::string& value) {
+    if (property_set(name, value.c_str()) != 0) {
+        LOG(WARNING) << "Failed to persist config property " << name;
+    }
 }
 
 StatusCode MotorcycleVehicleHardware::getValues(
@@ -1134,10 +1365,56 @@ StatusCode MotorcycleVehicleHardware::unsubscribe(int32_t /*propId*/, int32_t /*
 // GPIO Implementation
 // ============================================================================
 
-void MotorcycleVehicleHardware::loadGpioConfig() {
-    // Read GPIO configuration from vendor properties
-    // These are set by the MotoDash app settings
+void MotorcycleVehicleHardware::loadConfig() {
+    // Read persisted configuration from vendor properties. The persist.vendor.
+    // motodash.cfg.* values are written back by this HAL when the settings UI
+    // updates the VENDOR_CFG_* properties; the GPIO/product defaults may also
+    // come from PRODUCT_VENDOR_PROPERTIES.
     char propValue[PROPERTY_VALUE_MAX];
+    
+    // Read CAN interface name (default: can1 for Seeed CAN-FD HAT v2)
+    if (property_get("persist.vendor.motodash.can_interface", propValue, "can1") > 0) {
+        mCanInterface = propValue;
+    }
+    LOG(INFO) << "CAN interface configured: " << mCanInterface;
+
+    // Speed calculation parameters
+    if (property_get("persist.vendor.motodash.cfg.wheel_circumference", propValue, "") > 0) {
+        float v = strtof(propValue, nullptr);
+        if (v >= CFG_MIN_WHEEL_CIRCUMFERENCE_M && v <= CFG_MAX_WHEEL_CIRCUMFERENCE_M) {
+            mWheelCircumference = v;
+        } else {
+            LOG(WARNING) << "Ignoring out-of-range wheel_circumference: " << propValue;
+        }
+    }
+    if (property_get("persist.vendor.motodash.cfg.gear_ratio", propValue, "") > 0) {
+        float v = strtof(propValue, nullptr);
+        if (v >= CFG_MIN_GEAR_RATIO && v <= CFG_MAX_GEAR_RATIO) {
+            mGearRatio = v;
+        } else {
+            LOG(WARNING) << "Ignoring out-of-range gear_ratio: " << propValue;
+        }
+    }
+
+    // CAN IDs (stored as decimal; base 0 also accepts 0x-prefixed hex)
+    auto loadCanId = [&propValue](const char* name, std::atomic<uint32_t>* out) {
+        if (property_get(name, propValue, "") > 0) {
+            uint32_t v = static_cast<uint32_t>(strtoul(propValue, nullptr, 0));
+            if (v >= 1 && v <= static_cast<uint32_t>(CFG_MAX_CAN_ID)) {
+                *out = v;
+            } else {
+                LOG(WARNING) << "Ignoring out-of-range CAN ID for " << name << ": " << propValue;
+            }
+        }
+    };
+    loadCanId("persist.vendor.motodash.cfg.can_id_controller_status", &mCanIdControllerStatus);
+    loadCanId("persist.vendor.motodash.cfg.can_id_controller_temps", &mCanIdControllerTemps);
+    loadCanId("persist.vendor.motodash.cfg.can_id_bms", &mCanIdBms);
+
+    LOG(INFO) << "Decode config: wheel=" << mWheelCircumference << "m ratio=" << mGearRatio
+              << " canStatus=0x" << std::hex << mCanIdControllerStatus
+              << " canTemps=0x" << mCanIdControllerTemps
+              << " canBms=0x" << mCanIdBms << std::dec;
     
     if (property_get("persist.vendor.motodash.gpio.left_turn", propValue, "-1") > 0) {
         mGpioLeftTurnPin = atoi(propValue);

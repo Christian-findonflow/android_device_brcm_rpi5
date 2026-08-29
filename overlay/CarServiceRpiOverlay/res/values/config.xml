@@ -67,13 +67,10 @@
         <item>com.android.car.carlauncher/.HomeCockpitLauncherService#bind=start,user=foreground,trigger=userUnlocked</item>
     </string-array>
 
-    <!-- A name of a camera device that provides the rearview through EVS service -->
-    <string name="config_evsRearviewCameraId" translatable="false">/dev/video0</string>
+    <!-- Disable rearview camera for motorcycle - no backup camera needed -->
+    <string name="config_evsRearviewCameraId" translatable="false"></string>
 
-    <!-- The camera Activity name for EVS, if defined, the Activity will be launched by
-         CarEvsService. -->
-    <string name="config_evsCameraActivity" translatable="false">
-        com.google.android.car.evs/com.google.android.car.evs.CarEvsCameraPreviewActivity
-    </string>
+    <!-- Disable EVS camera activity for motorcycle -->
+    <string name="config_evsCameraActivity" translatable="false"></string>
 
 </resources>

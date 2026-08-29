@@ -1,0 +1,7 @@
+// Simulator-only helpers for the Cuttlefish motorcycle dashboard product.
+
+sh_binary {
+    name: "moto_cf_setup.sh",
+    src: "moto_cf_setup.sh",
+    vendor: true,
+}

@@ -1,0 +1,28 @@
+# Cuttlefish motorcycle dashboard simulator - service wiring.
+#
+# SIMULATOR ONLY: the guest runs SELinux-permissive and without the rpi5
+# sepolicy, but init refuses to exec a service binary that has no domain
+# transition EVEN in permissive mode. The explicit seclabel below (su domain,
+# userdebug-only) is the sanctioned debug escape hatch. The bike image uses
+# the real vhal-motorcycle-service.rc + sepolicy instead; that service cannot
+# start here (same missing transition) and is superseded by this one.
+
+service vendor.vehicle-hal-moto-cf /vendor/bin/hw/android.hardware.automotive.vehicle@V4-motorcycle-service
+    interface aidl android.hardware.automotive.vehicle.IVehicle/default
+    class early_hal
+    user root
+    group system inet
+    seclabel u:r:su:s0
+
+# Bring up the virtual CAN bus before/alongside the HAL (which retries its
+# socket for 30s). post-fs-data is early enough and actually fires, unlike
+# sys.boot_completed which never sets if boot is blocked.
+service moto_cf_setup /vendor/bin/moto_cf_setup.sh
+    class core
+    user root
+    oneshot
+    disabled
+    seclabel u:r:su:s0
+
+on post-fs-data
+    start moto_cf_setup

@@ -17,6 +17,11 @@
 -->
 
 <resources>
+    <!-- Instant window animations for the dashboard split display (see
+         AndroidRpiOverlay config.xml for rationale). Default only - the user
+         can still change it in developer options. -->
+    <fraction name="def_window_animation_scale">0%</fraction>
+
 
     <!-- Default for Settings.Global.DEVICE_NAME $1=MODEL -->
     <string name="def_device_name_simple">Raspberry Pi 5</string>
