@@ -12,6 +12,8 @@
 
 #include <gtest/gtest.h>
 
+#include <utils/SystemClock.h>
+
 #include <linux/can.h>
 
 #include <mutex>
@@ -34,6 +36,8 @@ class MotorcycleVehicleHardwareTestPeer {
     StatusCode applyConfigValue(const VehiclePropValue& value) {
         return mHw->applyConfigValue(value);
     }
+
+    void checkLinkTimeouts(int64_t nowNs) { mHw->checkLinkTimeouts(nowNs); }
 
   private:
     MotorcycleVehicleHardware* mHw;
@@ -428,6 +432,65 @@ TEST_F(MotorcycleVehicleHardwareTest, StatusFlagsNotifyOnlyOnChange) {
     mPeer->processCanFrame(frame);
     mPeer->processCanFrame(frame);
     EXPECT_EQ(countEvents(VENDOR_STATUS_FLAGS), 1u);
+}
+
+// Link status: frames set the bit; silence (via the watchdog check with an
+// explicit "now") clears it, so the UI can grey out instead of freezing.
+TEST_F(MotorcycleVehicleHardwareTest, LinkDropsWhenControllerGoesSilent) {
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x20, 0xB8, 0x0B, 0x00, 0x00, 0x00, 0x00}));
+    auto link = lastEvent(VENDOR_LINK_STATUS);
+    ASSERT_TRUE(link.has_value());
+    EXPECT_EQ(link->value.int32Values[0] & LINK_CONTROLLER, LINK_CONTROLLER);
+
+    // 2s later with no frames: controller link must drop
+    int64_t now = ::android::elapsedRealtimeNano() + 2000000000LL;
+    mPeer->checkLinkTimeouts(now);
+    link = lastEvent(VENDOR_LINK_STATUS);
+    ASSERT_TRUE(link.has_value());
+    EXPECT_EQ(link->value.int32Values[0] & LINK_CONTROLLER, 0);
+
+    // Frames resume: link restored
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x20, 0xB8, 0x0B, 0x00, 0x00, 0x00, 0x00}));
+    link = lastEvent(VENDOR_LINK_STATUS);
+    EXPECT_EQ(link->value.int32Values[0] & LINK_CONTROLLER, LINK_CONTROLLER);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, BmsLinkIndependentOfController) {
+    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0, 99, 0, 18, 3, 2, 0, 51}));
+    auto link = lastEvent(VENDOR_LINK_STATUS);
+    ASSERT_TRUE(link.has_value());
+    EXPECT_EQ(link->value.int32Values[0], LINK_BMS);
+
+    // Controller timeout must not clear the BMS bit
+    int64_t now = ::android::elapsedRealtimeNano() + 2000000000LL;
+    mPeer->checkLinkTimeouts(now);
+    link = lastEvent(VENDOR_LINK_STATUS);
+    EXPECT_EQ(link->value.int32Values[0] & LINK_BMS, LINK_BMS);
+}
+
+// Charging: standstill + charge current. Regen (moving, negative current)
+// must NOT register as charging.
+TEST_F(MotorcycleVehicleHardwareTest, ChargingDetectedAtStandstillOnly) {
+    // rpm 0, current -8.0A (0xFFB0 -> raw -80)
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x00, 0x00, 0x00, 0xD0, 0x02, 0xB0, 0xFF}));
+    auto charging = lastEvent(VENDOR_CHARGING);
+    ASSERT_TRUE(charging.has_value());
+    EXPECT_EQ(charging->value.int32Values[0], 1);
+
+    // Moving with regen current: not charging
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x20, 0xB8, 0x0B, 0xD0, 0x02, 0xB0, 0xFF}));
+    charging = lastEvent(VENDOR_CHARGING);
+    EXPECT_EQ(charging->value.int32Values[0], 0);
+
+    // Standstill drawing current (accessories/idle): not charging
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x00, 0x00, 0x00, 0xD0, 0x02, 0x14, 0x00}));
+    charging = lastEvent(VENDOR_CHARGING);
+    EXPECT_EQ(charging->value.int32Values[0], 0);
 }
 
 TEST_F(MotorcycleVehicleHardwareTest, GearChangeNotifiesOnlyOnChange) {

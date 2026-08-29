@@ -108,6 +108,18 @@ constexpr int32_t STATUS_BRAKE = 1 << 1;
 constexpr int32_t STATUS_CRUISE = 1 << 2;
 constexpr int32_t STATUS_SIDE_STAND = 1 << 3;
 
+// Data-link status. If the controller stops broadcasting, the dashboard
+// must show "no data" rather than freeze at the last values - a speedo
+// stuck at the last reading is worse than a dead one.
+constexpr int32_t VENDOR_LINK_STATUS = 0x21400043;         // Bitfield (int32)
+constexpr int32_t LINK_CONTROLLER = 1 << 0;   // 0x10261022/23 frames flowing
+constexpr int32_t LINK_BMS = 1 << 1;          // 0x6B1 or OBD2 responses flowing
+
+// Charging: standstill with sustained charge current. rpm==0 excludes regen,
+// which always coincides with the motor turning.
+constexpr int32_t VENDOR_CHARGING = 0x21400044;            // 0/1 (int32)
+constexpr float CHARGING_CURRENT_THRESHOLD_A = -0.5f;
+
 // Fault flags from the controller, combined into one bitfield so the UI needs
 // a single subscription. Low byte comes from 0x10261022 byte 0, second byte
 // from 0x10261023 byte 6.
@@ -223,6 +235,12 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void publishDistance(int64_t timestamp);
     void persistDistanceIfDue(int64_t timestamp, bool force);
     void updateStatusFlags(int32_t bits);
+    void updateChargingState(int rpm, float current);
+    // Called by the watchdog (and tests, with an explicit now) to drop link
+    // bits when frames stop arriving.
+    void checkLinkTimeouts(int64_t nowNs);
+    void setLinkBit(int32_t bit, bool alive);
+    void linkWatchdogThread();
     void sendDisplayReportIfDue(int64_t timestamp, float speedMps);
 
     // Configuration (CAN IDs, speed parameters, GPIO pins)
@@ -300,6 +318,11 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int64_t mLastPersistTimestamp = 0;
     std::atomic<bool> mTripResetRequested{false};
     int32_t mStatusFlags = 0;
+    int32_t mLinkStatus = 0;
+    int32_t mCharging = 0;
+    std::atomic<int64_t> mLastControllerFrameNs{0};
+    std::atomic<int64_t> mLastBmsFrameNs{0};
+    std::thread mLinkWatchdogThread;
     int64_t mLastDisplayReportTimestamp = 0;
 
     // Runtime-configurable decode parameters. Atomics: the CAN reader thread

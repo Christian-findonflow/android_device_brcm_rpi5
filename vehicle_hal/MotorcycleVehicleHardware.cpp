@@ -58,6 +58,10 @@ MotorcycleVehicleHardware::MotorcycleVehicleHardware(std::string canInterfaceOve
     
     // Start BMS polling thread for OBD2 queries
     mBmsPollingThread = std::thread(&MotorcycleVehicleHardware::bmsPollingThread, this);
+
+    // Link watchdog: drops the link bits when frames stop, so the UI can show
+    // "no data" instead of freezing at the last values.
+    mLinkWatchdogThread = std::thread(&MotorcycleVehicleHardware::linkWatchdogThread, this);
     LOG(INFO) << "BMS polling thread started";
 }
 
@@ -81,6 +85,9 @@ MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
     }
     if (mGpioReaderThread.joinable()) {
         mGpioReaderThread.join();
+    }
+    if (mLinkWatchdogThread.joinable()) {
+        mLinkWatchdogThread.join();
     }
     if (mCanSocket >= 0) {
         close(mCanSocket);
@@ -523,6 +530,25 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
         mCurrentValues[config.prop] = value;
     }
 
+    // Link status and charging state - ON_CHANGE
+    for (int32_t prop : {VENDOR_LINK_STATUS, VENDOR_CHARGING}) {
+        VehiclePropConfig config;
+        config.prop = prop;
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::ON_CHANGE;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+
+        VehiclePropValue value;
+        value.prop = prop;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.int32Values.push_back(0);
+        mCurrentValues[prop] = value;
+    }
+
     // Trip distance (READ_WRITE so the UI can reset it by writing 0)
     {
         VehiclePropConfig config;
@@ -770,8 +796,11 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
 
     // Fault bits from this frame, and distance accumulated from the speed we
     // just derived. Both run on the CAN reader thread, which owns that state.
+    mLastControllerFrameNs.store(timestamp, std::memory_order_relaxed);
+    setLinkBit(LINK_CONTROLLER, true);
     updateFaultFlags(errors, FAULT_MASK_CONTROLLER_STATUS);
     updateStatusFlags(statusAndGear & 0x0F);
+    updateChargingState(rpm, current);
     float speedMps = calculateSpeedFromRpm(rpm);
     accumulateDistance(speedMps, timestamp);
     publishDistance(timestamp);
@@ -856,6 +885,8 @@ void MotorcycleVehicleHardware::processControllerTemps(const uint8_t* data) {
 
     int64_t timestamp = elapsedRealtimeNano();
 
+    mLastControllerFrameNs.store(timestamp, std::memory_order_relaxed);
+    setLinkBit(LINK_CONTROLLER, true);
     // Second fault byte lives in this frame
     updateFaultFlags(tempErrors << 8, FAULT_MASK_CONTROLLER_TEMPS);
 
@@ -888,6 +919,8 @@ void MotorcycleVehicleHardware::processControllerTemps(const uint8_t* data) {
 }
 
 void MotorcycleVehicleHardware::processBmsData(const uint8_t* data) {
+    mLastBmsFrameNs.store(elapsedRealtimeNano(), std::memory_order_relaxed);
+    setLinkBit(LINK_BMS, true);
     // BMS broadcast message 0x6B1 - based on OBSERVED data pattern:
     // Raw: [0,99,0,18,3,2,0,51]
     // The spec says byte0=Ah, byte1=Temp, byte2=SOC but observed data doesn't match.
@@ -1003,6 +1036,8 @@ bool MotorcycleVehicleHardware::sendObd2Request(uint16_t pid) {
 
 void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t len) {
     if (len < 4) return;
+    mLastBmsFrameNs.store(elapsedRealtimeNano(), std::memory_order_relaxed);
+    setLinkBit(LINK_BMS, true);
 
     // OBD2 Mode 0x22 response format:
     // Byte 0: Length
@@ -1291,6 +1326,58 @@ void MotorcycleVehicleHardware::sendDisplayReportIfDue(int64_t timestamp, float 
             LOG(WARNING) << "Failed to send display report: " << strerror(errno);
         }
     }
+}
+
+void MotorcycleVehicleHardware::setLinkBit(int32_t bit, bool alive) {
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    int32_t updated = alive ? (mLinkStatus | bit) : (mLinkStatus & ~bit);
+    if (updated == mLinkStatus) {
+        return;
+    }
+    LOG(INFO) << "Link status: 0x" << std::hex << mLinkStatus << " -> 0x" << updated << std::dec;
+    mLinkStatus = updated;
+    auto& value = mCurrentValues[VENDOR_LINK_STATUS];
+    value.value.int32Values[0] = updated;
+    value.timestamp = elapsedRealtimeNano();
+    notifyPropertyChange(VENDOR_LINK_STATUS, value);
+}
+
+void MotorcycleVehicleHardware::checkLinkTimeouts(int64_t nowNs) {
+    // Controller broadcasts at 50ms; 1s of silence means the link is gone.
+    // The BMS broadcast rate is unconfirmed, so it gets a longer leash.
+    constexpr int64_t kControllerTimeoutNs = 1000000000LL;
+    constexpr int64_t kBmsTimeoutNs = 5000000000LL;
+
+    int64_t lastController = mLastControllerFrameNs.load(std::memory_order_relaxed);
+    if (lastController != 0 && nowNs - lastController > kControllerTimeoutNs) {
+        setLinkBit(LINK_CONTROLLER, false);
+    }
+    int64_t lastBms = mLastBmsFrameNs.load(std::memory_order_relaxed);
+    if (lastBms != 0 && nowNs - lastBms > kBmsTimeoutNs) {
+        setLinkBit(LINK_BMS, false);
+    }
+}
+
+void MotorcycleVehicleHardware::linkWatchdogThread() {
+    while (sleepUnlessStopping(500)) {
+        checkLinkTimeouts(elapsedRealtimeNano());
+    }
+}
+
+void MotorcycleVehicleHardware::updateChargingState(int rpm, float current) {
+    // Standstill with charge current flowing in. rpm==0 excludes regen, which
+    // only happens with the motor turning.
+    int32_t charging = (rpm == 0 && current <= CHARGING_CURRENT_THRESHOLD_A) ? 1 : 0;
+    if (charging == mCharging) {
+        return;
+    }
+    mCharging = charging;
+    LOG(INFO) << (charging ? "Charging detected" : "Charging ended");
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto& value = mCurrentValues[VENDOR_CHARGING];
+    value.value.int32Values[0] = charging;
+    value.timestamp = elapsedRealtimeNano();
+    notifyPropertyChange(VENDOR_CHARGING, value);
 }
 
 void MotorcycleVehicleHardware::accumulateDistance(float speedMps, int64_t timestamp) {
