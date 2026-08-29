@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Copyright (C) 2024 Motorcycle Dashboard Project
+    SPDX-License-Identifier: Apache-2.0
+-->
+<resources>
+    <!-- Navigation turn instructions render natively on the instrument
+         cluster (CarLauncher's OsmAnd AIDL widget), so the heads-up copy of
+         every turn is redundant noise - and before the HUN window was
+         confined to the right display area, each one slid straight across
+         the speedometer. -->
+    <bool name="config_showNavigationHeadsup">false</bool>
+</resources>
