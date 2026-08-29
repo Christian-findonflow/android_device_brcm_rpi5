@@ -1,6 +1,8 @@
 # NEO dashboard - follow-ups
 
-Living list. Updated 2026-08-29 after the simulator/test-harness session.
+Living list. Updated 2026-08-29 (evening) - the hardening batch (shutdown
+latency, BMS cadence + vcan responder, charge-rate units, log gating,
+side-stand indicator, TESTING.md correction) is done.
 
 ## Blocked on Christian (things only you can do)
 
@@ -29,17 +31,6 @@ Living list. Updated 2026-08-29 after the simulator/test-harness session.
 ## Ready to build (not blocked)
 
 ### Correctness / hardening
-- **HAL shutdown latency**: reader/poll threads use uninterruptible sleeps
-  (visible as ~25 s test-suite teardown; worst case slow HAL stop on the
-  bike). Replace with condition-variable waits.
-- **BMS OBD2 poll cadence**: 5 s x 17 PIDs = ~85 s per value. Do one fast
-  initial pass (~100 ms spacing), then 5 s steady state. Testable with a small
-  scripted OBD2 responder on vcan.
-- **EV_BATTERY_INSTANTANEOUS_CHARGE_RATE units/sign**: HAL publishes Watts,
-  positive = discharge; AOSP defines milliwatts, positive = charging. Fix HAL
-  + the cockpit power card together.
-- **Hot-path INFO logging**: frame dumps every ~10th frame in the HAL and
-  per-event logs in the UIs flood logcat on every ride. Demote/gate.
 - **GPIO chip selection**: HAL probes gpiochip0 then gpiochip4 and takes
   whichever opens; on Pi 5 both exist. Make the chip path a
   persist.vendor.motodash property alongside the pins.
@@ -58,8 +49,6 @@ Living list. Updated 2026-08-29 after the simulator/test-harness session.
   or retire the repo.
 
 ### Features
-- **Side-stand indicator** on the cluster (VENDOR_STATUS_FLAGS bit 3 already
-  published and tested; UI only).
 - **Real range model (item 4)**: live pack Ah x nominal V derated by SoH from
   the OBD2 data, learned Wh/km from the odometer we now have, instead of the
   hardcoded 5292 Wh / 50 Wh/km in HomeCockpitActivity. Better after the ride
@@ -73,13 +62,8 @@ Living list. Updated 2026-08-29 after the simulator/test-harness session.
   (bootanimation length, unused services). Matters for a vehicle.
 
 ### Simulator / harness
-- **TESTING.md correction**: the "push HAL binary via adb" fast loop does not
-  work - /vendor is erofs (read-only); HAL changes need an image rebuild +
-  relaunch (sim) or vendor flash (Pi). Apps still hot-deploy via adb install.
 - **Scripted ride generator**: synthesize a candump log (accel runs, gear
   changes, SoC drain, a fault event) for demos and regression replays.
-- **OBD2 BMS responder** for vcan, so BatteryDetailActivity and poll cadence
-  are testable end to end.
 - *(Optional)* Cuttlefish kernel with CONFIG_GPIO_SIM=y for true GPIO-path
   emulation (current debug source covers property->UI only).
 

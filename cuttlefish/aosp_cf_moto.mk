@@ -55,6 +55,7 @@ PRODUCT_VENDOR_PROPERTIES += \
 # vcan/service bring-up script
 PRODUCT_PACKAGES += \
     moto_can_replay \
+    moto_bms_sim \
     moto_cf_setup.sh
 
 # Navigation app for the maps tile / maps button

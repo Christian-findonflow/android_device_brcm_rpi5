@@ -252,6 +252,16 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
 
     int mCanSocket = -1;
     std::atomic<bool> mRunning{false};
+    // Interruptible sleep for worker threads: returns false when shutting
+    // down, so no thread holds up service stop by a fixed sleep. The CAN
+    // reader's blocking read() is unblocked separately via shutdown() on the
+    // socket in the destructor.
+    bool sleepUnlessStopping(int64_t ms);
+    std::mutex mShutdownMutex;
+    std::condition_variable mShutdownCv;
+    // Verbose CAN frame logging, persist.vendor.motodash.debug.canlog.
+    // Off by default: at 20-50Hz per frame type the dumps flood logcat.
+    bool mVerboseCanLog = false;
     std::thread mCanReaderThread;
     std::thread mBmsPollingThread;
     

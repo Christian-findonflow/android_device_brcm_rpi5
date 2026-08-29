@@ -116,3 +116,16 @@ cc_binary {
         "-Werror",
     ],
 }
+
+// Answers Orion OBD2 mode 0x22 requests with plausible pack data on a CAN
+// interface, so the BMS polling path is testable on vcan without a battery.
+cc_binary {
+    name: "moto_bms_sim",
+    vendor: true,
+    host_supported: true,
+    srcs: ["tests/Obd2BmsSim.cpp"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+}

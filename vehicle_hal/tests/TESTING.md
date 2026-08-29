@@ -53,28 +53,22 @@ Every property update the HAL would deliver to Android is printed as it
 happens. This is the place to verify decode changes against real traffic
 before anything touches the bike.
 
-## 3. Fast deploy to a bench Pi (no image flash)
+## 3. Fast deploy to a bench Pi (apps only)
 
 With the Pi on the bench reachable over adb (USB or `adb connect <ip>`):
 
 ```bash
-# one-time on a userdebug build
-adb root && adb disable-verity && adb reboot
-adb wait-for-device root && adb remount
-
-# HAL: push and restart just the service
-m android.hardware.automotive.vehicle@V4-motorcycle-service
-adb push out/target/product/rpi5/vendor/bin/hw/android.hardware.automotive.vehicle@V4-motorcycle-service /vendor/bin/hw/
-adb shell stop vendor.vehicle-hal-motorcycle
-adb shell start vendor.vehicle-hal-motorcycle
-
-# Launcher: install like a normal app update
+# Launcher/SystemUI: install like a normal app update
 m CarLauncher
 adb install -r out/target/product/rpi5/system/priv-app/CarLauncher/CarLauncher.apk
 ```
 
-Sepolicy or init.rc changes still need a vendor/boot image flash - but code
-changes to the HAL binary or the apps don't.
+CORRECTION (measured 2026-08-29): the HAL binary can NOT be adb-pushed.
+/vendor is erofs, mounted read-only - `adb push` to it silently no-ops even
+after `adb remount`, and running a copy from /data races the init-managed
+service (two HALs, CarService bound to the old one). HAL, sepolicy and
+init.rc changes need an image rebuild plus relaunch (simulator) or a vendor
+image flash (Pi). Apps still hot-deploy.
 
 ## 4. Full stack on the Pi without the bike
 

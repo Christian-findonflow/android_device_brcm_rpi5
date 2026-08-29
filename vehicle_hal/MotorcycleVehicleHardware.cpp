@@ -66,7 +66,13 @@ MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
     // Flush the odometer so a clean service stop does not lose distance since
     // the last throttled write.
     persistDistanceIfDue(elapsedRealtimeNano(), /*force=*/true);
+    mShutdownCv.notify_all();      // Wake any thread in sleepUnlessStopping
     mObd2ResponseCv.notify_all();  // Wake up BMS polling thread
+    if (mCanSocket >= 0) {
+        // Unblock the reader's blocking read(); on a silent bus it would
+        // otherwise never notice mRunning and the join below would hang.
+        shutdown(mCanSocket, SHUT_RDWR);
+    }
     if (mCanReaderThread.joinable()) {
         mCanReaderThread.join();
     }
@@ -581,6 +587,13 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     LOG(INFO) << "Initialized " << mPropertyConfigs.size() << " property configs";
 }
 
+bool MotorcycleVehicleHardware::sleepUnlessStopping(int64_t ms) {
+    std::unique_lock<std::mutex> lock(mShutdownMutex);
+    mShutdownCv.wait_for(lock, std::chrono::milliseconds(ms),
+                         [this] { return !mRunning; });
+    return mRunning;
+}
+
 bool MotorcycleVehicleHardware::openCanSocket() {
     mCanSocket = socket(PF_CAN, SOCK_RAW, CAN_RAW);
     if (mCanSocket < 0) {
@@ -626,7 +639,7 @@ void MotorcycleVehicleHardware::canReaderThread() {
             break;
         }
         LOG(WARNING) << "CAN socket not ready, retry " << (retry + 1) << "/" << maxRetries;
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        if (!sleepUnlessStopping(1000)) break;
     }
     
     if (mCanSocket < 0) {
@@ -650,7 +663,7 @@ void MotorcycleVehicleHardware::canReaderThread() {
 
         if (nbytes == sizeof(frame)) {
             frameCount++;
-            if (frameCount % 100 == 1) {
+            if (mVerboseCanLog && frameCount % 100 == 1) {
                 LOG(INFO) << "Received " << frameCount << " CAN frames, last ID=0x" 
                           << std::hex << (frame.can_id & CAN_EFF_MASK) << std::dec
                           << " extended=" << ((frame.can_id & CAN_EFF_FLAG) != 0);
@@ -722,9 +735,9 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
     // Map gear: 00=P(0), 01=R(1), 10=N(2), 11=D(3)
     int gear = gearRaw;
     
-    // Debug logging
+    // Frame dump, gated: at 20Hz this alone is ~2 lines/s in logcat
     static int statusMsgCount = 0;
-    if (++statusMsgCount % 10 == 1) {
+    if (mVerboseCanLog && ++statusMsgCount % 10 == 1) {
         LOG(INFO) << "Controller 0x10261022: data[0-7]=" 
                   << (int)data[0] << "," << (int)data[1] << "," 
                   << (int)data[2] << "," << (int)data[3] << ","
@@ -784,12 +797,16 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
         }
     }
 
-    // Update Battery power (V * A = Watts)
+    // Update battery charge rate. AOSP defines this property in MILLIWATTS
+    // with POSITIVE = charging; our controller reports current with positive
+    // = discharge, hence the negation. (Previously published as Watts with
+    // the sign inverted; nothing consumed it, the cockpit computes power from
+    // the vendor V/A properties.)
     {
-        float powerWatts = voltage * current;
+        float chargeRateMw = -(voltage * current) * 1000.0f;
         std::lock_guard<std::mutex> lock(mValuesMutex);
         auto& value = mCurrentValues[static_cast<int32_t>(VehicleProperty::EV_BATTERY_INSTANTANEOUS_CHARGE_RATE)];
-        value.value.floatValues[0] = powerWatts;
+        value.value.floatValues[0] = chargeRateMw;
         value.timestamp = timestamp;
         notifyPropertyChange(static_cast<int32_t>(VehicleProperty::EV_BATTERY_INSTANTANEOUS_CHARGE_RATE), value);
     }
@@ -826,9 +843,8 @@ void MotorcycleVehicleHardware::processControllerTemps(const uint8_t* data) {
     int throttle = data[4];  // Byte 4, not byte 2!
     int tempErrors = data[6];
 
-    // Debug logging
     static int tempsMsgCount = 0;
-    if (++tempsMsgCount % 10 == 1) {
+    if (mVerboseCanLog && ++tempsMsgCount % 10 == 1) {
         LOG(INFO) << "Controller 0x10261023 temps: data=[" 
                   << (int)data[0] << "," << (int)data[1] << ","
                   << (int)data[2] << "," << (int)data[3] << ","
@@ -886,7 +902,7 @@ void MotorcycleVehicleHardware::processBmsData(const uint8_t* data) {
     int64_t timestamp = elapsedRealtimeNano();
     
     static int bmsMsgCount = 0;
-    if (++bmsMsgCount % 10 == 1) {
+    if (mVerboseCanLog && ++bmsMsgCount % 10 == 1) {
         LOG(INFO) << "BMS 0x6B1 raw: [" << (int)data[0] << "," << (int)data[1] << "," 
                   << (int)data[2] << "," << (int)data[3] << "," << (int)data[4] << ","
                   << (int)data[5] << "," << (int)data[6] << "," << (int)data[7] << "]"
@@ -1144,7 +1160,7 @@ void MotorcycleVehicleHardware::bmsPollingThread() {
     
     // Wait for CAN socket to be ready
     while (mRunning && mCanSocket < 0) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        sleepUnlessStopping(1000);
     }
     
     if (!mRunning) return;
@@ -1173,23 +1189,29 @@ void MotorcycleVehicleHardware::bmsPollingThread() {
     };
     
     size_t pidIndex = 0;
-    
+    bool firstPassDone = false;
+
     while (mRunning) {
-        // Send request for current PID
         uint16_t pid = pollPids[pidIndex];
-        
+
         if (sendObd2Request(pid)) {
             // Wait for response (with timeout)
             std::unique_lock<std::mutex> lock(mObd2Mutex);
             mObd2ResponseCv.wait_for(lock, std::chrono::milliseconds(100),
                 [this] { return mObd2ResponseReceived || !mRunning; });
         }
-        
-        // Move to next PID
+
         pidIndex = (pidIndex + 1) % pollPids.size();
-        
-        // Delay between requests (5s between each - this data changes slowly)
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        if (pidIndex == 0) {
+            firstPassDone = true;
+        }
+
+        // First pass runs back-to-back so every value is populated within a
+        // couple of seconds of boot instead of ~85s. Steady state paces one
+        // request per second: a full refresh every ~17s keeps slow-moving
+        // values fresh enough for temperature/cell warnings at trivial bus
+        // load, where the old 5s-per-PID cycle left them up to 85s stale.
+        if (!sleepUnlessStopping(firstPassDone ? 1000 : 100)) break;
     }
     
     LOG(INFO) << "BMS polling thread exiting";
@@ -1350,14 +1372,14 @@ void MotorcycleVehicleHardware::notifyPropertyChange(int32_t propId, const Vehic
     if (mOnPropertyChangeCallback) {
         std::vector<VehiclePropValue> values = {value};
         // Log PERF_VEHICLE_SPEED specifically since app subscribes to it
-        if (propId == 291504647) {  // PERF_VEHICLE_SPEED
+        if (mVerboseCanLog && propId == 291504647) {  // PERF_VEHICLE_SPEED
             if (++speedNotifyCount % 30 == 1) {
                 LOG(INFO) << "SPEED notification #" << speedNotifyCount << " value=" 
                           << (value.value.floatValues.empty() ? 0 : value.value.floatValues[0]);
             }
         }
         // Log turn signal and high beam notifications
-        if (propId == 289408560 || propId == 289410562) {  // TURN_SIGNAL_STATE or HIGH_BEAM_LIGHTS_STATE
+        if (mVerboseCanLog && (propId == 289408560 || propId == 289410562)) {
             LOG(INFO) << "Calling callback for propId=" << propId << " value=" 
                       << (value.value.int32Values.empty() ? -1 : value.value.int32Values[0]);
         }
@@ -1658,6 +1680,11 @@ void MotorcycleVehicleHardware::loadConfig() {
         mGpioActiveLow = (atoi(propValue) != 0);
     }
     
+    mVerboseCanLog = property_get_bool("persist.vendor.motodash.debug.canlog", false);
+    if (mVerboseCanLog) {
+        LOG(WARNING) << "Verbose CAN logging enabled";
+    }
+
     // Debug indicator source: only honoured on a debuggable build. Lets the
     // simulator exercise the turn signal / high beam path end to end on a
     // kernel with no GPIO controller (Cuttlefish has neither gpio-sim nor
@@ -1715,7 +1742,7 @@ void MotorcycleVehicleHardware::gpioDebugReaderLoop() {
             updateHighBeamState(highBeam != 0);
             lastHighBeam = highBeam;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        sleepUnlessStopping(100);
     }
     LOG(INFO) << "GPIO debug reader exiting";
 }
@@ -1735,7 +1762,7 @@ void MotorcycleVehicleHardware::gpioReaderThread() {
             break;
         }
         LOG(WARNING) << "GPIO chip not ready, retry " << (retry + 1) << "/" << maxRetries;
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        if (!sleepUnlessStopping(1000)) break;
     }
     
     if (mGpioChipFd < 0) {
@@ -1829,7 +1856,7 @@ void MotorcycleVehicleHardware::gpioReaderThread() {
         }
         
         // Poll at 20Hz (50ms)
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        sleepUnlessStopping(50);
     }
     
     // Cleanup

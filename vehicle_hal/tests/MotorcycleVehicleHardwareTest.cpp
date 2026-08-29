@@ -165,11 +165,11 @@ TEST_F(MotorcycleVehicleHardwareTest, ControllerStatusDecodesRpmSpeedGearPower) 
     ASSERT_TRUE(amps.has_value());
     EXPECT_FLOAT_EQ(amps->value.floatValues[0], 25.5f);
 
-    // NOTE: asserts current behavior (Watts, positive = discharge). AOSP
-    // defines this property as milliwatts, positive = charging - known issue.
+    // AOSP semantics: milliwatts, positive = charging. 25.5A discharge at
+    // 72V is therefore -1,836,000 mW.
     auto power = lastEvent(PROP_CHARGE_RATE);
     ASSERT_TRUE(power.has_value());
-    EXPECT_NEAR(power->value.floatValues[0], 72.0f * 25.5f, 0.5f);
+    EXPECT_NEAR(power->value.floatValues[0], -(72.0f * 25.5f) * 1000.0f, 500.0f);
 }
 
 TEST_F(MotorcycleVehicleHardwareTest, RegenCurrentIsSigned) {
@@ -181,6 +181,11 @@ TEST_F(MotorcycleVehicleHardwareTest, RegenCurrentIsSigned) {
     auto amps = lastEvent(VENDOR_BATTERY_CURRENT);
     ASSERT_TRUE(amps.has_value());
     EXPECT_FLOAT_EQ(amps->value.floatValues[0], -10.0f);
+
+    // Regen: charging, so the AOSP charge-rate property goes positive
+    auto power = lastEvent(PROP_CHARGE_RATE);
+    ASSERT_TRUE(power.has_value());
+    EXPECT_GT(power->value.floatValues[0], 0.0f);
 }
 
 // Controller temps 0x10261023: [ctrlTemp, motorTemp, -, hall, throttle, -, err, -]
