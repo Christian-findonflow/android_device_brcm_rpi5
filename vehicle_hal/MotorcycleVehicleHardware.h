@@ -43,6 +43,9 @@ using ::aidl::android::hardware::automotive::vehicle::VehiclePropertyChangeMode;
 constexpr uint32_t CAN_ID_CONTROLLER_STATUS = 0x10261022;  // RPM, Gear, Battery V/A, Errors
 constexpr uint32_t CAN_ID_CONTROLLER_TEMPS = 0x10261023;   // Controller/Motor temps, Throttle
 constexpr uint32_t CAN_ID_BMS = 0x6B1;                      // Battery SoC, Temp
+// Display -> Controller: the controller expects its display to keep and
+// report the odometer/trip/speed (stock-system behaviour). 250ms, extended ID.
+constexpr uint32_t CAN_ID_DISPLAY_REPORT = 0x1026105A;
 
 // OBD2 CAN IDs for Orion BMS (standard 11-bit IDs)
 constexpr uint32_t CAN_ID_OBD2_REQUEST = 0x7E0;            // OBD2 request to BMS
@@ -96,6 +99,14 @@ constexpr int32_t VENDOR_CELL_HIGH_ID = 0x2150001D;        // High cell ID (int)
 constexpr int32_t VENDOR_FAN_SPEED = 0x2150001E;           // Fan speed 0-6 (int)
 constexpr int32_t VENDOR_HEATSINK_TEMP = 0x2160001F;       // Heatsink temperature (°C)
 constexpr int32_t VENDOR_PACK_DOD = 0x21600020;            // Depth of discharge (%)
+
+// Status flags from the controller status frame (0x10261022 data1 bits 0-3).
+// Side stand deserves a UI indicator; the rest are informational.
+constexpr int32_t VENDOR_STATUS_FLAGS = 0x21400042;        // Bitfield (int32)
+constexpr int32_t STATUS_LOCKED = 1 << 0;
+constexpr int32_t STATUS_BRAKE = 1 << 1;
+constexpr int32_t STATUS_CRUISE = 1 << 2;
+constexpr int32_t STATUS_SIDE_STAND = 1 << 3;
 
 // Fault flags from the controller, combined into one bitfield so the UI needs
 // a single subscription. Low byte comes from 0x10261022 byte 0, second byte
@@ -211,6 +222,8 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void accumulateDistance(float speedMps, int64_t timestamp);
     void publishDistance(int64_t timestamp);
     void persistDistanceIfDue(int64_t timestamp, bool force);
+    void updateStatusFlags(int32_t bits);
+    void sendDisplayReportIfDue(int64_t timestamp, float speedMps);
 
     // Configuration (CAN IDs, speed parameters, GPIO pins)
     void loadConfig();
@@ -276,6 +289,8 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     double mPersistedTripMeters = 0.0;
     int64_t mLastPersistTimestamp = 0;
     std::atomic<bool> mTripResetRequested{false};
+    int32_t mStatusFlags = 0;
+    int64_t mLastDisplayReportTimestamp = 0;
 
     // Runtime-configurable decode parameters. Atomics: the CAN reader thread
     // reads them per frame while binder threads may update them via setValues.

@@ -498,6 +498,25 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
         mCurrentValues[config.prop] = value;
     }
 
+    // Status flags (side stand, brake, cruise, lock) - ON_CHANGE
+    {
+        VehiclePropConfig config;
+        config.prop = VENDOR_STATUS_FLAGS;
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::ON_CHANGE;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+
+        VehiclePropValue value;
+        value.prop = config.prop;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.int32Values.push_back(0);
+        mCurrentValues[config.prop] = value;
+    }
+
     // Trip distance (READ_WRITE so the UI can reset it by writing 0)
     {
         VehiclePropConfig config;
@@ -739,9 +758,12 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
     // Fault bits from this frame, and distance accumulated from the speed we
     // just derived. Both run on the CAN reader thread, which owns that state.
     updateFaultFlags(errors, FAULT_MASK_CONTROLLER_STATUS);
-    accumulateDistance(calculateSpeedFromRpm(rpm), timestamp);
+    updateStatusFlags(statusAndGear & 0x0F);
+    float speedMps = calculateSpeedFromRpm(rpm);
+    accumulateDistance(speedMps, timestamp);
     publishDistance(timestamp);
     persistDistanceIfDue(timestamp, /*force=*/false);
+    sendDisplayReportIfDue(timestamp, speedMps);
 
     // Update Gear
     {
@@ -1198,6 +1220,55 @@ void MotorcycleVehicleHardware::updateFaultFlags(int32_t newBits, int32_t mask) 
     value.value.int32Values[0] = updated;
     value.timestamp = elapsedRealtimeNano();
     notifyPropertyChange(VENDOR_FAULT_FLAGS, value);
+}
+
+void MotorcycleVehicleHardware::updateStatusFlags(int32_t bits) {
+    if (bits == mStatusFlags) {
+        return;
+    }
+    mStatusFlags = bits;
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto& value = mCurrentValues[VENDOR_STATUS_FLAGS];
+    value.value.int32Values[0] = bits;
+    value.timestamp = elapsedRealtimeNano();
+    notifyPropertyChange(VENDOR_STATUS_FLAGS, value);
+}
+
+// The stock display reports odometer/trip/speed back to the controller at
+// 250ms on 0x1026105A. We do the same so the controller sees a compliant
+// display. Layout per the controller spec: data0/data2 odometer km (16-bit,
+// low/high), data3/data4 trip km, data5 speed km/h, data6 rolling counter.
+void MotorcycleVehicleHardware::sendDisplayReportIfDue(int64_t timestamp, float speedMps) {
+    if (mCanSocket < 0 || (timestamp - mLastDisplayReportTimestamp) < 250000000LL) {
+        return;
+    }
+    mLastDisplayReportTimestamp = timestamp;
+
+    uint32_t odoKm = static_cast<uint32_t>(mOdometerMeters / 1000.0);
+    if (odoKm > 99999) odoKm = 99999;
+    uint32_t tripKm = static_cast<uint32_t>(mTripMeters / 1000.0);
+    if (tripKm > 1024) tripKm = 1024;
+    uint32_t speedKmh = static_cast<uint32_t>(speedMps * 3.6f);
+    if (speedKmh > 199) speedKmh = 199;
+    static uint8_t counter = 0;
+
+    struct can_frame frame;
+    std::memset(&frame, 0, sizeof(frame));
+    frame.can_id = CAN_ID_DISPLAY_REPORT | CAN_EFF_FLAG;
+    frame.can_dlc = 8;
+    frame.data[0] = odoKm & 0xFF;
+    frame.data[2] = (odoKm >> 8) & 0xFF;
+    frame.data[3] = tripKm & 0xFF;
+    frame.data[4] = (tripKm >> 8) & 0xFF;
+    frame.data[5] = static_cast<uint8_t>(speedKmh);
+    frame.data[6] = counter++;
+
+    if (write(mCanSocket, &frame, sizeof(frame)) != sizeof(frame)) {
+        static int failCount = 0;
+        if (++failCount % 100 == 1) {
+            LOG(WARNING) << "Failed to send display report: " << strerror(errno);
+        }
+    }
 }
 
 void MotorcycleVehicleHardware::accumulateDistance(float speedMps, int64_t timestamp) {

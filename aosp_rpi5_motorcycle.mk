@@ -127,6 +127,14 @@ PRODUCT_COPY_FILES += \
 PRODUCT_PACKAGES += \
     android.hardware.automotive.vehicle@V4-motorcycle-service
 
+# Odometer seed: the old dashboard's last persisted reading was 115.413 km
+# (rpi android dash misc/Settings.json, "Mileage"). Used only until the HAL
+# first persists its own value; update via
+#   adb shell setprop persist.vendor.motodash.odometer <metres>
+# if the bike has been ridden since that snapshot.
+PRODUCT_VENDOR_PROPERTIES += \
+    persist.vendor.motodash.odometer=115413
+
 # GPIO pin configuration for turn signals and high beam
 PRODUCT_VENDOR_PROPERTIES += \
     persist.vendor.motodash.gpio.left_turn=16 \

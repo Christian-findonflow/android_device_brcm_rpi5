@@ -401,6 +401,30 @@ TEST_F(MotorcycleVehicleHardwareTest, TripResetLeavesOdometerIntact) {
     EXPECT_LT(lastEvent(VENDOR_TRIP_DISTANCE)->value.floatValues[0], 0.001f);
 }
 
+// Status bits (0x10261022 data1 low nibble): lock, brake, cruise, side stand
+TEST_F(MotorcycleVehicleHardwareTest, StatusFlagsSurfaceSideStandAndBrake) {
+    // data1 = 0x2A: gear N (0x20) + brake (bit1) + side stand (bit3)
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
+    auto status = lastEvent(VENDOR_STATUS_FLAGS);
+    ASSERT_TRUE(status.has_value());
+    EXPECT_EQ(status->value.int32Values[0], STATUS_BRAKE | STATUS_SIDE_STAND);
+
+    // Clearing them notifies again
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
+    status = lastEvent(VENDOR_STATUS_FLAGS);
+    EXPECT_EQ(status->value.int32Values[0], 0);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, StatusFlagsNotifyOnlyOnChange) {
+    auto frame = makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                           {0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+    mPeer->processCanFrame(frame);
+    mPeer->processCanFrame(frame);
+    EXPECT_EQ(countEvents(VENDOR_STATUS_FLAGS), 1u);
+}
+
 TEST_F(MotorcycleVehicleHardwareTest, GearChangeNotifiesOnlyOnChange) {
     auto driveFrame = makeFrame(CAN_ID_CONTROLLER_STATUS, true,
                                 {0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
