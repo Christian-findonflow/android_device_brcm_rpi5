@@ -43,6 +43,11 @@ PRODUCT_PACKAGES += \
     CarLauncherRpiOverlay \
     SettingsProviderRpiOverlay
 
+# NEO boot animation (the bike gets it via device.mk; this product does not
+# inherit that file)
+PRODUCT_COPY_FILES += \
+    device/brcm/rpi5/bootanimation/bootanimation.zip:$(TARGET_COPY_OUT_SYSTEM)/media/bootanimation.zip
+
 # Virtual CAN bus: bring up vcan0 at boot; the HAL binds it via the property
 PRODUCT_COPY_FILES += \
     device/brcm/rpi5/cuttlefish/init.moto_cf.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.moto_cf.rc

@@ -22,6 +22,11 @@
          can still change it in developer options. -->
     <fraction name="def_window_animation_scale">0%</fraction>
 
+    <!-- The display is the instrument cluster: it must never time out while
+         the system is up. Car power policy governs actual on/off; this
+         removes the 60s Settings timeout as a failure mode. -->
+    <integer name="def_screen_off_timeout">2147483647</integer>
+
 
     <!-- Default for Settings.Global.DEVICE_NAME $1=MODEL -->
     <string name="def_device_name_simple">Raspberry Pi 5</string>
