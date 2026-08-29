@@ -23,6 +23,12 @@
 # in device/google/cuttlefish/shared/auto/device_vendor.mk).
 LOCAL_VHAL_PRODUCT_PACKAGE := android.hardware.automotive.vehicle@V4-motorcycle-service
 
+# NEO boot animation. Must be declared BEFORE the inherit below: for
+# duplicate PRODUCT_COPY_FILES destinations the FIRST definition wins, and
+# the inherited car product ships its own bootanimation.zip.
+PRODUCT_COPY_FILES += \
+    device/brcm/rpi5/bootanimation/bootanimation.zip:$(TARGET_COPY_OUT_SYSTEM)/media/bootanimation.zip
+
 $(call inherit-product, device/google/cuttlefish/vsoc_x86_64_only/auto/aosp_cf.mk)
 
 # device/brcm/rpi5 is a soong namespace; without this line every module under
@@ -42,11 +48,6 @@ PRODUCT_PACKAGES += \
     CarSystemUIRpiOverlay \
     CarLauncherRpiOverlay \
     SettingsProviderRpiOverlay
-
-# NEO boot animation (the bike gets it via device.mk; this product does not
-# inherit that file)
-PRODUCT_COPY_FILES += \
-    device/brcm/rpi5/bootanimation/bootanimation.zip:$(TARGET_COPY_OUT_SYSTEM)/media/bootanimation.zip
 
 # Virtual CAN bus: bring up vcan0 at boot; the HAL binds it via the property
 PRODUCT_COPY_FILES += \
