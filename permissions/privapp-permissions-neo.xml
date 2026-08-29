@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Additional privileged permissions for the NEO motorcycle dashboard.
+
+  CAR_MILEAGE is signature|privileged: CarLauncher declares it, but a
+  privileged permission is only granted if the app is also allowlisted here.
+  The stock allowlist (packages/services/Car/data/etc/com.android.car.carlauncher.xml)
+  omits it, so without this PERF_ODOMETER registration fails and the odometer
+  stays at zero.
+
+  Runtime ("dangerous") permissions such as READ_CAR_EXTERIOR_LIGHTS do NOT
+  belong here - they are pre-granted in default-permissions-neo.xml instead.
+-->
+<permissions>
+    <privapp-permissions package="com.android.car.carlauncher">
+        <permission name="android.car.permission.CAR_MILEAGE"/>
+    </privapp-permissions>
+</permissions>

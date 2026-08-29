@@ -48,7 +48,8 @@ PRODUCT_COPY_FILES += \
     device/brcm/rpi5/cuttlefish/init.moto_cf.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.moto_cf.rc
 
 PRODUCT_VENDOR_PROPERTIES += \
-    persist.vendor.motodash.can_interface=vcan0
+    persist.vendor.motodash.can_interface=vcan0 \
+    persist.vendor.motodash.gpio.debug=1
 
 # On-device CAN frame sender/replayer for test traffic, and the simulator
 # vcan/service bring-up script
@@ -61,7 +62,8 @@ PRODUCT_PACKAGES += OsmAnd
 
 # Pre-granted permissions for bundled apps (no permission dialogs on a bike)
 PRODUCT_COPY_FILES += \
-    device/brcm/rpi5/permissions/default-permissions-neo.xml:$(TARGET_COPY_OUT_VENDOR)/etc/default-permissions/default-permissions-neo.xml
+    device/brcm/rpi5/permissions/default-permissions-neo.xml:$(TARGET_COPY_OUT_VENDOR)/etc/default-permissions/default-permissions-neo.xml \
+    device/brcm/rpi5/permissions/privapp-permissions-neo.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/privapp-permissions-neo.xml
 
 
 PRODUCT_NAME := aosp_cf_moto

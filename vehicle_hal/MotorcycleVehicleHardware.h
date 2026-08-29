@@ -97,6 +97,32 @@ constexpr int32_t VENDOR_FAN_SPEED = 0x2150001E;           // Fan speed 0-6 (int
 constexpr int32_t VENDOR_HEATSINK_TEMP = 0x2160001F;       // Heatsink temperature (°C)
 constexpr int32_t VENDOR_PACK_DOD = 0x21600020;            // Depth of discharge (%)
 
+// Fault flags from the controller, combined into one bitfield so the UI needs
+// a single subscription. Low byte comes from 0x10261022 byte 0, second byte
+// from 0x10261023 byte 6.
+constexpr int32_t VENDOR_FAULT_FLAGS = 0x21400040;         // Bitfield (int32)
+
+// Trip distance in km. READ_WRITE: writing any value sets the trip meter,
+// so the UI resets it by writing 0.
+constexpr int32_t VENDOR_TRIP_DISTANCE = 0x21600041;       // km (float)
+
+// Fault bits, low byte: controller status frame (0x10261022 data[0])
+constexpr int32_t FAULT_MOTOR = 1 << 0;
+constexpr int32_t FAULT_HALL = 1 << 1;
+constexpr int32_t FAULT_THROTTLE = 1 << 2;
+constexpr int32_t FAULT_CONTROLLER = 1 << 3;
+constexpr int32_t FAULT_BRAKE = 1 << 4;
+constexpr int32_t FAULT_LIMP_HOME = 1 << 5;
+// Fault bits, second byte: temperature frame (0x10261023 data[6])
+constexpr int32_t FAULT_OVER_CURRENT = 1 << 8;
+constexpr int32_t FAULT_OVER_VOLTAGE = 1 << 9;
+constexpr int32_t FAULT_UNDER_VOLTAGE = 1 << 10;
+constexpr int32_t FAULT_CONTROLLER_OVER_TEMP = 1 << 11;
+constexpr int32_t FAULT_MOTOR_OVER_TEMP = 1 << 12;
+
+constexpr int32_t FAULT_MASK_CONTROLLER_STATUS = 0x00FF;
+constexpr int32_t FAULT_MASK_CONTROLLER_TEMPS = 0xFF00;
+
 // Writable configuration properties. Set from the dashboard settings UI via
 // CarPropertyManager (requires android.car.permission.CAR_VENDOR_EXTENSION);
 // the HAL validates, applies, and persists them to persist.vendor.motodash.cfg.*.
@@ -180,6 +206,12 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void updateBmsProperty(int32_t propId, float value);
     void updateBmsPropertyInt(int32_t propId, int32_t value);
     
+    // Fault flags and distance accumulation (CAN reader thread only)
+    void updateFaultFlags(int32_t newBits, int32_t mask);
+    void accumulateDistance(float speedMps, int64_t timestamp);
+    void publishDistance(int64_t timestamp);
+    void persistDistanceIfDue(int64_t timestamp, bool force);
+
     // Configuration (CAN IDs, speed parameters, GPIO pins)
     void loadConfig();
     StatusCode applyConfigValue(const VehiclePropValue& value);
@@ -187,6 +219,9 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
 
     // GPIO functions
     bool openGpioChip();
+    // Debug-only indicator source used when there is no GPIO controller
+    // (the Cuttlefish simulator). Never runs on a user build.
+    void gpioDebugReaderLoop();
     void gpioReaderThread();
     void updateTurnSignalState(int state);
     void updateHighBeamState(bool on);
@@ -220,6 +255,7 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int mGpioHighBeamPin = -1;
     std::atomic<bool> mGpioActiveLow{true};
     std::thread mGpioReaderThread;
+    bool mGpioDebugSource = false;
     
     // CAN interface name (configurable via system property, default: can1)
     std::string mCanInterface = "can1";
@@ -228,6 +264,18 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     // configurable via the VENDOR_CFG_* properties)
     static constexpr float DEFAULT_WHEEL_CIRCUMFERENCE_M = 1.894f;  // 17" wheel, 120/70 tire
     static constexpr float DEFAULT_GEAR_RATIO = 4.0f;
+
+    // Fault state and trip/odometer accumulation. These are owned by the CAN
+    // reader thread; a trip reset from a binder thread is requested via the
+    // atomic flag rather than by writing the counters directly.
+    int32_t mFaultFlags = 0;
+    double mOdometerMeters = 0.0;
+    double mTripMeters = 0.0;
+    int64_t mLastDistanceTimestamp = 0;
+    double mPersistedOdometerMeters = 0.0;
+    double mPersistedTripMeters = 0.0;
+    int64_t mLastPersistTimestamp = 0;
+    std::atomic<bool> mTripResetRequested{false};
 
     // Runtime-configurable decode parameters. Atomics: the CAN reader thread
     // reads them per frame while binder threads may update them via setValues.

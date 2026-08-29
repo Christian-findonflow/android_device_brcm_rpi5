@@ -50,7 +50,8 @@ MotorcycleVehicleHardware::MotorcycleVehicleHardware(std::string canInterfaceOve
     LOG(INFO) << "CAN reader thread started (will retry connection)";
     
     // Start GPIO reader thread if any GPIO pins are configured
-    if (mGpioLeftTurnPin >= 0 || mGpioRightTurnPin >= 0 || mGpioHighBeamPin >= 0) {
+    if (mGpioDebugSource || mGpioLeftTurnPin >= 0 || mGpioRightTurnPin >= 0
+        || mGpioHighBeamPin >= 0) {
         mGpioReaderThread = std::thread(&MotorcycleVehicleHardware::gpioReaderThread, this);
         LOG(INFO) << "GPIO reader thread started";
     }
@@ -62,6 +63,9 @@ MotorcycleVehicleHardware::MotorcycleVehicleHardware(std::string canInterfaceOve
 
 MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
     mRunning = false;
+    // Flush the odometer so a clean service stop does not lose distance since
+    // the last throttled write.
+    persistDistanceIfDue(elapsedRealtimeNano(), /*force=*/true);
     mObd2ResponseCv.notify_all();  // Wake up BMS polling thread
     if (mCanReaderThread.joinable()) {
         mCanReaderThread.join();
@@ -246,7 +250,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
         value.prop = config.prop;
         value.areaId = 0;
         value.timestamp = elapsedRealtimeNano();
-        value.value.floatValues.push_back(0.0f);
+        value.value.floatValues.push_back(static_cast<float>(mOdometerMeters / 1000.0));
         mCurrentValues[config.prop] = value;
     }
 
@@ -475,6 +479,47 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addFloatVendorProp(VENDOR_CHARGE_LIMIT, 0.0f, 500.0f, 0.0f);         // Charge limit A
     addFloatVendorProp(VENDOR_DISCHARGE_LIMIT, 0.0f, 500.0f, 0.0f);      // Discharge limit A
 
+    // Fault flags (ON_CHANGE - only fires when the bitfield actually changes)
+    {
+        VehiclePropConfig config;
+        config.prop = VENDOR_FAULT_FLAGS;
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::ON_CHANGE;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+
+        VehiclePropValue value;
+        value.prop = config.prop;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.int32Values.push_back(0);
+        mCurrentValues[config.prop] = value;
+    }
+
+    // Trip distance (READ_WRITE so the UI can reset it by writing 0)
+    {
+        VehiclePropConfig config;
+        config.prop = VENDOR_TRIP_DISTANCE;
+        config.access = VehiclePropertyAccess::READ_WRITE;
+        config.changeMode = VehiclePropertyChangeMode::CONTINUOUS;
+        config.minSampleRate = 0.1f;
+        config.maxSampleRate = 10.0f;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        areaConfig.access = VehiclePropertyAccess::READ_WRITE;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+
+        VehiclePropValue value;
+        value.prop = config.prop;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.floatValues.push_back(static_cast<float>(mTripMeters / 1000.0));
+        mCurrentValues[config.prop] = value;
+    }
+
     // Writable configuration properties (see VENDOR_CFG_* in the header).
     // Registered with the values loaded from persist.vendor.motodash.* so the
     // settings UI reads back the current configuration.
@@ -691,6 +736,13 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
         notifyPropertyChange(static_cast<int32_t>(VehicleProperty::PERF_VEHICLE_SPEED), value);
     }
 
+    // Fault bits from this frame, and distance accumulated from the speed we
+    // just derived. Both run on the CAN reader thread, which owns that state.
+    updateFaultFlags(errors, FAULT_MASK_CONTROLLER_STATUS);
+    accumulateDistance(calculateSpeedFromRpm(rpm), timestamp);
+    publishDistance(timestamp);
+    persistDistanceIfDue(timestamp, /*force=*/false);
+
     // Update Gear
     {
         int vehicleGear = mapGearToVehicleGear(gear);
@@ -765,6 +817,9 @@ void MotorcycleVehicleHardware::processControllerTemps(const uint8_t* data) {
     }
 
     int64_t timestamp = elapsedRealtimeNano();
+
+    // Second fault byte lives in this frame
+    updateFaultFlags(tempErrors << 8, FAULT_MASK_CONTROLLER_TEMPS);
 
     // Update Controller temp (using ENGINE_COOLANT_TEMP)
     {
@@ -1118,6 +1173,86 @@ void MotorcycleVehicleHardware::bmsPollingThread() {
     LOG(INFO) << "BMS polling thread exiting";
 }
 
+// Distance/odometer persistence limits. Odometer values live in
+// persist.vendor.motodash.* so they survive a reboot; writes are throttled
+// because every persist property write rewrites the persistent property file.
+namespace {
+constexpr double kPersistDistanceThresholdM = 500.0;
+constexpr int64_t kPersistIntervalNs = 30LL * 1000000000LL;
+// Ignore implausible gaps (first frame after boot, or a pause in traffic) so a
+// stale timestamp cannot add a large bogus distance in one step.
+constexpr int64_t kMaxDistanceStepNs = 1000000000LL;
+}  // namespace
+
+void MotorcycleVehicleHardware::updateFaultFlags(int32_t newBits, int32_t mask) {
+    int32_t updated = (mFaultFlags & ~mask) | (newBits & mask);
+    if (updated == mFaultFlags) {
+        return;  // ON_CHANGE: only notify on an actual transition
+    }
+    LOG(INFO) << "Fault flags changed: 0x" << std::hex << mFaultFlags << " -> 0x" << updated
+              << std::dec;
+    mFaultFlags = updated;
+
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto& value = mCurrentValues[VENDOR_FAULT_FLAGS];
+    value.value.int32Values[0] = updated;
+    value.timestamp = elapsedRealtimeNano();
+    notifyPropertyChange(VENDOR_FAULT_FLAGS, value);
+}
+
+void MotorcycleVehicleHardware::accumulateDistance(float speedMps, int64_t timestamp) {
+    if (mTripResetRequested.exchange(false)) {
+        mTripMeters = 0.0;
+        mPersistedTripMeters = -1.0;  // force a persist on the next check
+    }
+
+    int64_t deltaNs = timestamp - mLastDistanceTimestamp;
+    mLastDistanceTimestamp = timestamp;
+    if (deltaNs <= 0 || deltaNs > kMaxDistanceStepNs || speedMps <= 0.0f) {
+        return;
+    }
+
+    double metres = static_cast<double>(speedMps) * (static_cast<double>(deltaNs) / 1e9);
+    mOdometerMeters += metres;
+    mTripMeters += metres;
+}
+
+void MotorcycleVehicleHardware::publishDistance(int64_t timestamp) {
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+
+    auto& odo = mCurrentValues[static_cast<int32_t>(VehicleProperty::PERF_ODOMETER)];
+    odo.value.floatValues[0] = static_cast<float>(mOdometerMeters / 1000.0);
+    odo.timestamp = timestamp;
+    notifyPropertyChange(static_cast<int32_t>(VehicleProperty::PERF_ODOMETER), odo);
+
+    auto& trip = mCurrentValues[VENDOR_TRIP_DISTANCE];
+    trip.value.floatValues[0] = static_cast<float>(mTripMeters / 1000.0);
+    trip.timestamp = timestamp;
+    notifyPropertyChange(VENDOR_TRIP_DISTANCE, trip);
+}
+
+void MotorcycleVehicleHardware::persistDistanceIfDue(int64_t timestamp, bool force) {
+    bool distanceDue = std::abs(mOdometerMeters - mPersistedOdometerMeters)
+                               >= kPersistDistanceThresholdM
+                       || std::abs(mTripMeters - mPersistedTripMeters)
+                               >= kPersistDistanceThresholdM;
+    bool timeDue = (timestamp - mLastPersistTimestamp) >= kPersistIntervalNs;
+    if (!force && !(distanceDue && timeDue)) {
+        return;
+    }
+    if (mOdometerMeters == mPersistedOdometerMeters && mTripMeters == mPersistedTripMeters) {
+        return;
+    }
+
+    persistConfig("persist.vendor.motodash.odometer",
+                  std::to_string(static_cast<long long>(mOdometerMeters)));
+    persistConfig("persist.vendor.motodash.trip",
+                  std::to_string(static_cast<long long>(mTripMeters)));
+    mPersistedOdometerMeters = mOdometerMeters;
+    mPersistedTripMeters = mTripMeters;
+    mLastPersistTimestamp = timestamp;
+}
+
 float MotorcycleVehicleHardware::calculateSpeedFromRpm(int rpm) const {
     // Speed (m/s) = RPM * wheel_circumference / (gear_ratio * 60)
     return static_cast<float>(rpm) * mWheelCircumference.load(std::memory_order_relaxed) /
@@ -1259,6 +1394,14 @@ StatusCode MotorcycleVehicleHardware::applyConfigValue(const VehiclePropValue& v
             mGpioHighBeamPin = v;
             persistConfig("persist.vendor.motodash.gpio.high_beam", std::to_string(v));
             break;
+        }
+        case VENDOR_TRIP_DISTANCE: {
+            // Any write resets the trip meter; the UI writes 0. Handled by the
+            // CAN reader thread so it cannot race distance accumulation.
+            if (value.value.floatValues.size() != 1) return StatusCode::INVALID_ARG;
+            mTripResetRequested = true;
+            LOG(INFO) << "Trip meter reset requested";
+            return StatusCode::OK;
         }
         case VENDOR_CFG_GPIO_ACTIVE_LOW: {
             int32_t v;
@@ -1411,6 +1554,21 @@ void MotorcycleVehicleHardware::loadConfig() {
     loadCanId("persist.vendor.motodash.cfg.can_id_controller_temps", &mCanIdControllerTemps);
     loadCanId("persist.vendor.motodash.cfg.can_id_bms", &mCanIdBms);
 
+    // Restore the odometer and trip meter. The odometer must never go
+    // backwards across a reboot, so it is persisted (throttled) as we ride.
+    if (property_get("persist.vendor.motodash.odometer", propValue, "0") > 0) {
+        double v = strtod(propValue, nullptr);
+        if (v >= 0.0) mOdometerMeters = v;
+    }
+    if (property_get("persist.vendor.motodash.trip", propValue, "0") > 0) {
+        double v = strtod(propValue, nullptr);
+        if (v >= 0.0) mTripMeters = v;
+    }
+    mPersistedOdometerMeters = mOdometerMeters;
+    mPersistedTripMeters = mTripMeters;
+    LOG(INFO) << "Restored odometer=" << (mOdometerMeters / 1000.0) << "km trip="
+              << (mTripMeters / 1000.0) << "km";
+
     LOG(INFO) << "Decode config: wheel=" << mWheelCircumference << "m ratio=" << mGearRatio
               << " canStatus=0x" << std::hex << mCanIdControllerStatus
               << " canTemps=0x" << mCanIdControllerTemps
@@ -1429,6 +1587,17 @@ void MotorcycleVehicleHardware::loadConfig() {
         mGpioActiveLow = (atoi(propValue) != 0);
     }
     
+    // Debug indicator source: only honoured on a debuggable build. Lets the
+    // simulator exercise the turn signal / high beam path end to end on a
+    // kernel with no GPIO controller (Cuttlefish has neither gpio-sim nor
+    // gpio-mockup). Real hardware always uses the GPIO lines.
+    if (property_get_bool("ro.debuggable", false) &&
+        property_get_bool("persist.vendor.motodash.gpio.debug", false)) {
+        mGpioDebugSource = true;
+        LOG(WARNING) << "GPIO debug source ENABLED - indicators driven by "
+                        "vendor.motodash.debug.* properties, not real GPIO";
+    }
+
     LOG(INFO) << "GPIO config loaded: left=" << mGpioLeftTurnPin 
               << " right=" << mGpioRightTurnPin 
               << " highbeam=" << mGpioHighBeamPin
@@ -1453,7 +1622,38 @@ bool MotorcycleVehicleHardware::openGpioChip() {
     return false;
 }
 
+void MotorcycleVehicleHardware::gpioDebugReaderLoop() {
+    LOG(INFO) << "GPIO debug reader running (properties, not hardware)";
+    int lastTurn = -1;
+    int lastHighBeam = -1;
+    while (mRunning) {
+        char value[PROPERTY_VALUE_MAX];
+        int turn = 0;
+        if (property_get("vendor.motodash.debug.turn", value, "0") > 0) {
+            turn = atoi(value);
+        }
+        int highBeam = 0;
+        if (property_get("vendor.motodash.debug.high_beam", value, "0") > 0) {
+            highBeam = atoi(value);
+        }
+        if (turn != lastTurn) {
+            updateTurnSignalState(turn);
+            lastTurn = turn;
+        }
+        if (highBeam != lastHighBeam) {
+            updateHighBeamState(highBeam != 0);
+            lastHighBeam = highBeam;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    LOG(INFO) << "GPIO debug reader exiting";
+}
+
 void MotorcycleVehicleHardware::gpioReaderThread() {
+    if (mGpioDebugSource) {
+        gpioDebugReaderLoop();
+        return;
+    }
     LOG(INFO) << "GPIO reader thread starting with pins: left=" << mGpioLeftTurnPin 
               << " right=" << mGpioRightTurnPin << " highbeam=" << mGpioHighBeamPin;
     

@@ -102,7 +102,8 @@ PRODUCT_PACKAGES += \
 
 # Pre-granted permissions for bundled apps (no permission dialogs on a bike)
 PRODUCT_COPY_FILES += \
-    device/brcm/rpi5/permissions/default-permissions-neo.xml:$(TARGET_COPY_OUT_VENDOR)/etc/default-permissions/default-permissions-neo.xml
+    device/brcm/rpi5/permissions/default-permissions-neo.xml:$(TARGET_COPY_OUT_VENDOR)/etc/default-permissions/default-permissions-neo.xml \
+    device/brcm/rpi5/permissions/privapp-permissions-neo.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/privapp-permissions-neo.xml
 
 
 # Overlays

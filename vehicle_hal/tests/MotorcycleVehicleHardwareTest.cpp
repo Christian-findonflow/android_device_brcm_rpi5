@@ -48,6 +48,7 @@ constexpr int32_t PROP_CHARGE_RATE =
         static_cast<int32_t>(VehicleProperty::EV_BATTERY_INSTANTANEOUS_CHARGE_RATE);
 constexpr int32_t PROP_COOLANT = static_cast<int32_t>(VehicleProperty::ENGINE_COOLANT_TEMP);
 constexpr int32_t PROP_OIL = static_cast<int32_t>(VehicleProperty::ENGINE_OIL_TEMP);
+constexpr int32_t PROP_ODOMETER = static_cast<int32_t>(VehicleProperty::PERF_ODOMETER);
 constexpr int32_t PROP_EV_BATTERY_LEVEL =
         static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL);
 
@@ -293,6 +294,111 @@ TEST_F(MotorcycleVehicleHardwareTest, ConfigValidationRejectsBadValues) {
     // Non-config properties stay read-only
     EXPECT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_BATTERY_VOLTAGE, 80.0f)),
               StatusCode::ACCESS_DENIED);
+}
+
+// Fault bits: 0x10261022 byte 0 (motor/hall/throttle/controller/brake/limp)
+// and 0x10261023 byte 6 (over-current/voltage/temperature).
+TEST_F(MotorcycleVehicleHardwareTest, ControllerFaultBitsAreSurfaced) {
+    // byte0 = motor fault | throttle fault
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x05, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
+
+    auto faults = lastEvent(VENDOR_FAULT_FLAGS);
+    ASSERT_TRUE(faults.has_value());
+    EXPECT_EQ(faults->value.int32Values[0], FAULT_MOTOR | FAULT_THROTTLE);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, TemperatureFaultBitsUseTheSecondByte) {
+    // temps frame byte6 = controller over-temp (bit 3) | motor over-temp (bit 4)
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_TEMPS, true,
+                                     {90, 120, 0, 0, 0, 0, 0x18, 0}));
+
+    auto faults = lastEvent(VENDOR_FAULT_FLAGS);
+    ASSERT_TRUE(faults.has_value());
+    EXPECT_EQ(faults->value.int32Values[0],
+              FAULT_CONTROLLER_OVER_TEMP | FAULT_MOTOR_OVER_TEMP);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, FaultsFromBothFramesCombineAndClearIndependently) {
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x01, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_TEMPS, true,
+                                     {90, 120, 0, 0, 0, 0, 0x10, 0}));
+    auto faults = lastEvent(VENDOR_FAULT_FLAGS);
+    ASSERT_TRUE(faults.has_value());
+    EXPECT_EQ(faults->value.int32Values[0], FAULT_MOTOR | FAULT_MOTOR_OVER_TEMP);
+
+    // Clearing the controller frame's byte must not clear the temperature bits
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
+    faults = lastEvent(VENDOR_FAULT_FLAGS);
+    EXPECT_EQ(faults->value.int32Values[0], FAULT_MOTOR_OVER_TEMP);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, FaultsNotifyOnlyOnChange) {
+    auto frame = makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                           {0x02, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+    mPeer->processCanFrame(frame);
+    mPeer->processCanFrame(frame);
+    mPeer->processCanFrame(frame);
+    EXPECT_EQ(countEvents(VENDOR_FAULT_FLAGS), 1u);
+}
+
+// Odometer integrates speed over time; both meters advance together and the
+// trip meter is resettable while the odometer keeps counting.
+TEST_F(MotorcycleVehicleHardwareTest, OdometerAccumulatesWithDistance) {
+    auto rolling = makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                             {0x00, 0x20, 0xB8, 0x0B, 0x00, 0x00, 0x00, 0x00});
+    // First frame only establishes the time reference (no elapsed interval yet)
+    mPeer->processCanFrame(rolling);
+    auto start = lastEvent(PROP_ODOMETER);
+    ASSERT_TRUE(start.has_value());
+    float startKm = start->value.floatValues[0];
+
+    // Subsequent frames accumulate; the exact distance depends on wall-clock
+    // spacing, so assert monotonic non-negative growth rather than a value.
+    for (int i = 0; i < 5; i++) {
+        mPeer->processCanFrame(rolling);
+    }
+    auto after = lastEvent(PROP_ODOMETER);
+    ASSERT_TRUE(after.has_value());
+    EXPECT_GE(after->value.floatValues[0], startKm);
+
+    auto trip = lastEvent(VENDOR_TRIP_DISTANCE);
+    ASSERT_TRUE(trip.has_value());
+    EXPECT_GE(trip->value.floatValues[0], 0.0f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, StationaryBikeDoesNotAccumulateDistance) {
+    auto stopped = makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                             {0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+    mPeer->processCanFrame(stopped);
+    float before = lastEvent(PROP_ODOMETER)->value.floatValues[0];
+    for (int i = 0; i < 10; i++) {
+        mPeer->processCanFrame(stopped);
+    }
+    EXPECT_FLOAT_EQ(lastEvent(PROP_ODOMETER)->value.floatValues[0], before);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, TripResetLeavesOdometerIntact) {
+    auto rolling = makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                             {0x00, 0x20, 0xB8, 0x0B, 0x00, 0x00, 0x00, 0x00});
+    for (int i = 0; i < 4; i++) {
+        mPeer->processCanFrame(rolling);
+    }
+    float odoBefore = lastEvent(PROP_ODOMETER)->value.floatValues[0];
+
+    VehiclePropValue reset;
+    reset.prop = VENDOR_TRIP_DISTANCE;
+    reset.areaId = 0;
+    reset.value.floatValues = {0.0f};
+    EXPECT_EQ(mPeer->applyConfigValue(reset), StatusCode::OK);
+
+    // The reset is applied by the reader thread on the next frame
+    mPeer->processCanFrame(rolling);
+
+    EXPECT_GE(lastEvent(PROP_ODOMETER)->value.floatValues[0], odoBefore);
+    EXPECT_LT(lastEvent(VENDOR_TRIP_DISTANCE)->value.floatValues[0], 0.001f);
 }
 
 TEST_F(MotorcycleVehicleHardwareTest, GearChangeNotifiesOnlyOnChange) {
