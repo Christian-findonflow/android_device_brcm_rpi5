@@ -99,8 +99,8 @@ entries below and the git log of the three forks.
   NightBrightnessController computes solar elevation from the last GPS fix
   and writes Settings.System screen brightness on band changes; CarService
   forwards to VHAL DISPLAY_BRIGHTNESS -> sysfs backlight. Verify the full
-  chain on the Pi (the simulator has no backlight); night level tunable via
-  persist.vendor.motodash.night_brightness.
+  chain on the Pi (the simulator has no backlight); night level is the
+  Rider setting (Dim/Normal/Bright) in Settings -> Motorcycle.
 - **Fault detail screen**: banner tap -> full-screen fault list with
   plain-language explanations and "what to do".
 - **Boot time**: measured on the simulator 2026-08-29. Warm boot (the key-on
@@ -153,6 +153,15 @@ bike:
 Order: BT headset + OsmAnd voice -> PTT decision -> offline assistant ->
 LLM tier (needs the BT-tethering item). Multi-week; after the ride
 capture and decode fixes.
+
+### Settings structure (implemented 2026-08-30, device verification pending - build host unstable)
+Rider settings (units, night brightness, trip reset) are open to anyone and
+sized for gloves; Workshop settings (wheel, drivetrain, battery, CAN, GPIO,
+diagnostics) sit behind a passcode set in Workshop itself (open until one is
+set; salted SHA-256 in launcher prefs - keeps passengers out, not adb).
+Rider is reachable from the cockpit gear and injected into native
+CarSettings' homepage device group via settingslib's extra-settings
+meta-data on RiderSettingsActivity.
 
 ### UX (from the 2026-08-29 evening review)
 - **Cluster turn-by-turn: IMPLEMENTED** (CarLauncher ad248b48) - OsmAnd V1
