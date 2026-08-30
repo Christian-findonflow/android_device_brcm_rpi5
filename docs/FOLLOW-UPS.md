@@ -83,6 +83,14 @@ entries below and the git log of the three forks.
   crop and bring the cross-cluster slide back.
 
 ### Product hygiene
+- **CarLatinIME targetSdk bump (23 -> current)**: only bites runtime installs
+  (`adb install -r` needs `--bypass-low-target-sdk-block`, and Android's
+  install floor keeps rising - the flashed image is unaffected). Bump on the
+  next touch of the app: needs `android:exported="true"` on the IME service
+  (31+ gate) and likely a `<queries>` entry for com.android.car (30+ package
+  visibility - retest the park-to-type lockout). ~30 min incl. the 7 s
+  rebuild loop.
+
 - **Junk packages still ship** (KitchenSink, AdasLocationTestApp, Calendar,
   Camera2, PrintSpooler...). PRODUCT_PACKAGES_REMOVE is a LineageOS-ism and
   post-inheritance filter-out was measured to remove nothing. Real fix:
