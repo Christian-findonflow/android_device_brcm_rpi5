@@ -25,6 +25,16 @@ entries below and the git log of the three forks.
   gradient cards, cluster RPM/battery bars
 - Cuttlefish simulator product, host test suite (19 tests), CAN replay tools
 
+2026-08-30 (evening):
+- Keyboard (CarLatinIME, new fork neo-car-latinime): key geometry moved to
+  %p display fractions so the grid fills the 800px panel edge to edge -
+  ~68x47px letter keys (was ~39px huddled in the middle third), wider
+  return, 45% spacebar, ~200px total height so the cluster speed readout
+  stays visible. Verified typing + symbol layout in OsmAnd search on the
+  simulator. Runtime updates need
+  `adb install -r --bypass-low-target-sdk-block` (app targets SDK 23);
+  image builds unaffected.
+
 ## Blocked on Christian (things only you can do)
 
 1. **Ride capture from the bike** - the single most valuable input, and
