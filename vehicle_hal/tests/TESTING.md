@@ -139,3 +139,25 @@ whether the controller's current field carries a sign, the gear nibble
 encoding above D, and the OBD2 byte order (pack Ah near 68 confirms
 big-endian). The OBD2 requests (0x7E0) and responses (0x7E8) are in the log
 too, as are our own 0x1026105A display reports.
+
+## Simulated ride (no bike needed)
+
+`make_ride_log.py` synthesizes a full ride (accelerate, 56 km/h cruise, regen
+deceleration, 20 km/h stretch, stop) as controller 0x10261022 frames at 10 Hz
+plus BMS 0x6B1 at 1 Hz:
+
+    python3 vehicle_hal/tests/make_ride_log.py > ride.log
+    adb push ride.log /data/local/tmp/
+    adb shell moto_can_replay vcan0 -f /data/local/tmp/ride.log   # adb root first
+
+Verified on the simulator (2026-08-30): live speed + gear D on the cluster,
+V/A system-bar chips, SoC from 0x6B1, range EMA re-learning during the ride
+(persist.vendor.motodash.whperkm moves, range line grows as the average
+settles), odometer + trip advancing by exactly the integrated distance, and
+the full trust cascade blanking every surface a few seconds after the last
+frame. Note the SoC step (60 -> 59) exercises the arrival-SoC projection too.
+
+Platform caveat found this way: CarDrivingStateService logs "Required
+property not supported: 287310850" (PARKING_BRAKE_ON) at boot and never
+leaves UNKNOWN, so UX restrictions are INERT - nothing locks at speed,
+including the keyboard. See FOLLOW-UPS "Riding lockout policy".

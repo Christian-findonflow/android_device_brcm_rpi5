@@ -37,6 +37,18 @@ entries below and the git log of the three forks.
 
 ## Blocked on Christian (things only you can do)
 
+- **Riding lockout policy** (found via the 2026-08-30 simulated ride): the
+  platform's driving-state layer is INERT - our VHAL doesn't implement
+  PARKING_BRAKE_ON, so CarDrivingStateService fails init at boot ("Driving
+  state will always be fully restrictive" - except the restriction plumbing
+  never engages either). Net effect today: NOTHING locks while moving -
+  keyboard, app grid, settings all usable at speed. Decide: (a) keep it
+  inert (rider judgment, current behavior, zero work), or (b) implement
+  PARKING_BRAKE_ON=false in the HAL *together with* a motorcycle
+  car_ux_restrictions config - never alone, because the default config
+  demands distraction-optimized apps while moving and would BLOCK OsmAnd
+  and music at speed.
+
 1. **Ride capture from the bike** - the single most valuable input, and
    now one switch away: Dash Settings -> Diagnostics -> "Capture CAN
    traffic", ride, then `adb root; adb pull /data/vendor/motodash/` (see
@@ -245,7 +257,9 @@ config_earlyStartupServices) or move its work elsewhere.
   dead controller link and its SoC blanks without BMS; bottom-bar V/A, temp
   and battery chips link-gate to "--". Cosmetic remainder: the battery and
   charging BAR FILLS keep their last width on a dead link (the text goes
-  "--"); blank or dim the fills too.
+  "--"); blank or dim the fills too. Same class (simulated ride, 2026-08-30): the
+  cockpit TEMPERATURES and PACK HEALTH cards keep stale values on a dead
+  link while the SystemUI chips blank correctly.
 - **Ride summary** on key-off / next boot (distance, time, average Wh/km) -
   data now exists; also feeds the learned range model.
 - **OsmAnd first-run**: pre-seed config or ship a region map (~1 GB image
