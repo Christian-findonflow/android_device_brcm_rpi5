@@ -3,3 +3,5 @@ set_prop(vendor_init, vendor_ffmpeg_config_prop)
 set_prop(vendor_init, vendor_hdmi_config_prop)
 set_prop(vendor_init, vendor_hwc_config_prop)
 set_prop(vendor_init, vendor_motodash_prop)
+# mkdir /data/vendor/motodash from the vehicle HAL's rc
+allow vendor_init motodash_data_file:dir create_dir_perms;

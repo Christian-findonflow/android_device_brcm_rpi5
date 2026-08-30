@@ -54,7 +54,7 @@ constexpr uint32_t CAN_ID_OBD2_RESPONSE = 0x7E8;           // OBD2 response from
 // Orion BMS OBD2 PIDs (Mode 0x22 - Extended Diagnostics)
 constexpr uint16_t BMS_PID_PACK_CURRENT = 0xF00C;          // Signed pack current (0.1A)
 constexpr uint16_t BMS_PID_PACK_VOLTAGE = 0xF00D;          // Pack voltage (0.1V)
-constexpr uint16_t BMS_PID_PACK_SOC = 0xF00F;              // State of charge (0.5%)
+constexpr uint16_t BMS_PID_PACK_SOC = 0xF00F;              // State of charge (0.5%/bit)
 constexpr uint16_t BMS_PID_PACK_SOH = 0xF013;              // State of health (%)
 constexpr uint16_t BMS_PID_PACK_CYCLES = 0xF018;           // Total cycles
 constexpr uint16_t BMS_PID_TEMP_HIGH = 0xF028;             // Highest pack temp (°C)
@@ -127,6 +127,16 @@ constexpr int32_t VENDOR_CHARGING = 0x21400044;            // 0/1 (int32)
 // and distance use the standard *_DISPLAY_UNITS properties (normal
 // READ_CAR_DISPLAY_UNITS / CONTROL_CAR_DISPLAY_UNITS permissions).
 constexpr int32_t VENDOR_CFG_TEMP_DISPLAY_UNITS = 0x21400045;
+
+// CAN capture (0/1). While on, every frame the HAL sees or sends is appended
+// in candump -l format to /data/vendor/motodash/can-<epoch>.log, so a ride
+// can be pulled with adb and replayed through moto_can_replay and the host
+// tests. Toggled from Dash Settings; persisted; default off.
+constexpr int32_t VENDOR_CFG_CAN_CAPTURE = 0x21400046;
+// Signed pack current from the BMS (0xF00C), amps, +discharge. The
+// controller's current field is documented as unsigned, so this is the
+// trustworthy sign for charging/regen decisions once the BMS answers.
+constexpr int32_t VENDOR_PACK_CURRENT = 0x21600047;
 constexpr float CHARGING_CURRENT_THRESHOLD_A = -0.5f;
 
 // Fault flags from the controller, combined into one bitfield so the UI needs
@@ -261,6 +271,10 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void setLinkBit(int32_t bit, bool alive);
     void linkWatchdogThread();
     void sendDisplayReportIfDue(int64_t timestamp, float speedMps);
+    // CAN capture to /data (see VENDOR_CFG_CAN_CAPTURE). Called for every
+    // received frame (processCanFrame) and every frame we transmit.
+    void captureFrame(const struct can_frame& frame);
+    void closeCapture();
 
     // Configuration (CAN IDs, speed parameters, GPIO pins)
     void loadConfig();
@@ -357,6 +371,23 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     // settings: the settings UI writes them, every display surface (cluster,
     // cockpit, SystemUI bar) subscribes, and the HAL persists them so a
     // reboot keeps the rider's choice. The HAL itself always works in SI.
+    // CAN capture state. The file is opened lazily on the first frame after
+    // enabling, so a boot with an idle bus creates nothing.
+    std::atomic<bool> mCaptureEnabled{false};
+    std::mutex mCaptureMutex;
+    int mCaptureFd = -1;
+    int64_t mLastCaptureSyncNs = 0;
+    uint64_t mCaptureBytes = 0;
+    bool mCaptureFailureLogged = false;
+    std::string mCaptureDir = "/data/vendor/motodash";
+
+    // BMS-sourced SoC and current (OBD2 0xF00F / 0xF00C). When fresh they
+    // outrank the 0x6B1 broadcast decode (whose layout is inferred) and the
+    // controller's unsigned current. CAN reader thread only.
+    int64_t mLastSocPidNs = 0;
+    int64_t mLastBmsCurrentNs = 0;
+    float mBmsCurrentA = 0.0f;
+
     int32_t mSpeedDisplayUnits;        // VehicleUnit KILOMETERS_PER_HOUR / MILES_PER_HOUR
     int32_t mDistanceDisplayUnits;     // VehicleUnit KILOMETER / MILE
     int32_t mTemperatureDisplayUnits;  // VehicleUnit CELSIUS / FAHRENHEIT

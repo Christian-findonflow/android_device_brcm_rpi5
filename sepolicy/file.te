@@ -2,3 +2,5 @@ type mediadrm_vendor_data_file, file_type, data_file_type;
 type sysfs_hdmi, fs_type, sysfs_type;
 type gpio_device, dev_type;
 type sysfs_gpio, fs_type, sysfs_type;
+# CAN capture files written by the motorcycle vehicle HAL (/data/vendor/motodash)
+type motodash_data_file, file_type, data_file_type;

@@ -25,8 +25,8 @@ namespace {
 constexpr uint32_t kRequestId = 0x7E0;
 constexpr uint32_t kResponseId = 0x7E8;
 
-// value16 is the raw 16-bit little-endian payload; len 1 sends only the low
-// byte. Values chosen to look like a healthy warm pack mid-discharge.
+// value16 is the raw 16-bit payload, sent big-endian (MSB first) as UDS/OBD-II
+// data is; len 1 sends only the low byte. Values chosen to look like a healthy warm pack mid-discharge.
 struct PidValue {
     uint16_t pid;
     uint8_t len;
@@ -102,9 +102,11 @@ int main(int argc, char** argv) {
             reply.data[1] = 0x62;
             reply.data[2] = frame.data[2];
             reply.data[3] = frame.data[3];
-            reply.data[4] = entry.value16 & 0xFF;
             if (entry.len == 2) {
-                reply.data[5] = (entry.value16 >> 8) & 0xFF;
+                reply.data[4] = (entry.value16 >> 8) & 0xFF;
+                reply.data[5] = entry.value16 & 0xFF;
+            } else {
+                reply.data[4] = entry.value16 & 0xFF;
             }
             if (write(sock, &reply, sizeof(reply)) == static_cast<ssize_t>(sizeof(reply))) {
                 if (++answered % 20 == 1) {

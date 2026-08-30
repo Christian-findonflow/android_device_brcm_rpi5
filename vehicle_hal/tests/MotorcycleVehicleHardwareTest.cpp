@@ -17,8 +17,11 @@
 
 #include <linux/can.h>
 
+#include <dirent.h>
+#include <fstream>
 #include <mutex>
 #include <optional>
+#include <regex>
 #include <vector>
 
 namespace android::hardware::automotive::vehicle::motorcycle {
@@ -48,6 +51,7 @@ class MotorcycleVehicleHardwareTestPeer {
     }
     void publishRange(int64_t ts) { mHw->publishRange(ts); }
     void setLastSoc(float soc) { mHw->mLastSocPercent = soc; }
+    void setCaptureDir(const std::string& dir) { mHw->mCaptureDir = dir; }
 
   private:
     MotorcycleVehicleHardware* mHw;
@@ -108,6 +112,7 @@ class MotorcycleVehicleHardwareTest : public ::testing::Test {
         property_set("persist.vendor.motodash.cfg.units_speed", "");
         property_set("persist.vendor.motodash.cfg.units_distance", "");
         property_set("persist.vendor.motodash.cfg.units_temp", "");
+        property_set("persist.vendor.motodash.cfg.can_capture", "");
         // Nonexistent interface: the reader thread stays in its retry loop and
         // never interferes; frames are injected through the peer instead.
         mHardware = std::make_unique<MotorcycleVehicleHardware>("vcan-test-none");
@@ -259,9 +264,10 @@ TEST_F(MotorcycleVehicleHardwareTest, Obd2SohResponse) {
 }
 
 TEST_F(MotorcycleVehicleHardwareTest, Obd2CellVoltageScaling) {
-    // PID 0xF032 low cell voltage, raw 36500 (0x8E94, LE in payload) => 3.65 V
+    // PID 0xF032 low cell voltage, raw 36500 (0x8E94, big-endian as OBD2 data
+    // is) => 3.65 V
     auto frame = makeFrame(CAN_ID_OBD2_RESPONSE, false,
-                           {0x05, 0x62, 0xF0, 0x32, 0x94, 0x8E, 0, 0});
+                           {0x05, 0x62, 0xF0, 0x32, 0x8E, 0x94, 0, 0});
     mPeer->processCanFrame(frame);
 
     auto low = lastEvent(VENDOR_CELL_VOLTAGE_LOW);
@@ -649,6 +655,89 @@ TEST_F(MotorcycleVehicleHardwareTest, PackEnergyConfigAppliesAndValidates) {
               StatusCode::INVALID_ARG);
     EXPECT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_PACK_ENERGY_WH, 99999.0f)),
               StatusCode::INVALID_ARG);
+}
+
+// ============================================================================
+// BMS OBD2: authoritative SoC / current, big-endian payloads
+// ============================================================================
+
+TEST_F(MotorcycleVehicleHardwareTest, PidSocOutranksBroadcastSoc) {
+    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0, 99, 0, 50, 3, 2, 0, 65}));
+    EXPECT_FLOAT_EQ(lastEvent(PROP_EV_BATTERY_LEVEL)->value.floatValues[0], 50.0f);
+
+    // 0xF00F answers 61.5% (raw 123 at 0.5%/bit): it wins...
+    mPeer->processCanFrame(makeFrame(CAN_ID_OBD2_RESPONSE, false,
+                                     {0x04, 0x62, 0xF0, 0x0F, 123, 0, 0, 0}));
+    EXPECT_FLOAT_EQ(lastEvent(PROP_EV_BATTERY_LEVEL)->value.floatValues[0], 61.5f);
+
+    // ...and a following broadcast no longer overrides it
+    clearEvents();
+    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0, 99, 0, 50, 3, 2, 0, 65}));
+    EXPECT_FALSE(lastEvent(PROP_EV_BATTERY_LEVEL).has_value());
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, PackAmphoursAreBigEndian) {
+    // 0xF010, 68.3Ah = raw 683 = 0x02AB, MSB first
+    mPeer->processCanFrame(makeFrame(CAN_ID_OBD2_RESPONSE, false,
+                                     {0x05, 0x62, 0xF0, 0x10, 0x02, 0xAB, 0, 0}));
+    EXPECT_FLOAT_EQ(lastEvent(VENDOR_PACK_AMPHOURS)->value.floatValues[0], 68.3f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, BmsSignedCurrentDrivesChargingDetection) {
+    // BMS reports -6.0A (charging): raw -60 = 0xFFC4 big-endian
+    mPeer->processCanFrame(makeFrame(CAN_ID_OBD2_RESPONSE, false,
+                                     {0x05, 0x62, 0xF0, 0x0C, 0xFF, 0xC4, 0, 0}));
+    EXPECT_FLOAT_EQ(lastEvent(VENDOR_PACK_CURRENT)->value.floatValues[0], -6.0f);
+
+    // Controller frame at standstill reporting an unsigned-looking +6.0A: the
+    // fresh BMS sign wins and charging is detected.
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x20, 0x00, 0x00, 0xD0, 0x02, 0x3C, 0x00}));
+    auto charging = lastEvent(VENDOR_CHARGING);
+    ASSERT_TRUE(charging.has_value());
+    EXPECT_EQ(charging->value.int32Values[0], 1);
+}
+
+// ============================================================================
+// CAN capture
+// ============================================================================
+
+TEST_F(MotorcycleVehicleHardwareTest, CaptureWritesCandumpFormat) {
+    char dirTemplate[] = "/tmp/motocapXXXXXX";
+    ASSERT_NE(mkdtemp(dirTemplate), nullptr);
+    std::string dir = dirTemplate;
+    mPeer->setCaptureDir(dir);
+
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_CAPTURE, 1)), StatusCode::OK);
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x30, 0xE6, 0x09, 0xD0, 0x02, 0x16, 0x01}));
+    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0, 99, 0, 50, 3, 2, 0, 65}));
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_CAPTURE, 0)), StatusCode::OK);
+
+    std::string path;
+    if (DIR* d = opendir(dir.c_str())) {
+        while (struct dirent* e = readdir(d)) {
+            if (std::string(e->d_name).rfind("can-", 0) == 0) path = dir + "/" + e->d_name;
+        }
+        closedir(d);
+    }
+    ASSERT_FALSE(path.empty()) << "no capture file in " << dir;
+    std::ifstream in(path);
+    std::string l1, l2;
+    ASSERT_TRUE(std::getline(in, l1));
+    ASSERT_TRUE(std::getline(in, l2));
+    // candump -l: "(sec.usec) iface ID#DATA"; extended IDs 8 hex digits
+    std::regex ext(R"(^\(\d+\.\d{6}\) \S+ 10261022#0030E609D0021601$)");
+    std::regex sff(R"(^\(\d+\.\d{6}\) \S+ 6B1#0063003203020041$)");
+    EXPECT_TRUE(std::regex_match(l1, ext)) << l1;
+    EXPECT_TRUE(std::regex_match(l2, sff)) << l2;
+
+    // Disabled: nothing more is written
+    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0, 99, 0, 50, 3, 2, 0, 65}));
+    std::ifstream again(path);
+    int lines = 0; std::string tmp;
+    while (std::getline(again, tmp)) lines++;
+    EXPECT_EQ(lines, 2);
 }
 
 }  // namespace

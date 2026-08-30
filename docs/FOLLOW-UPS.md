@@ -27,15 +27,20 @@ entries below and the git log of the three forks.
 
 ## Blocked on Christian (things only you can do)
 
-1. **Ride capture from the bike** - the single most valuable input:
-   `candump -l can1` during a short ride (bike on, some throttle, both brakes,
-   side stand up/down). This settles, permanently:
-   - the real 0x6B1 BMS broadcast layout (two competing inferences today:
-     the old dashboard's CanSettings vs one observed frame; the HAL currently
-     uses the observed decode - SoC byte3, temp byte7-40)
-   - whether gear needs the spec-noted "+1" display offset
-   - whether 0x1026105A data5 speed is really a single byte
-   - replay fixtures for the harness (`canplayer` / `moto_can_replay -f`)
+1. **Ride capture from the bike** - the single most valuable input, and
+   now one switch away: Dash Settings -> Diagnostics -> "Capture CAN
+   traffic", ride, then `adb root; adb pull /data/vendor/motodash/` (see
+   vehicle_hal/tests/TESTING.md "Ride capture"). This settles, permanently:
+   - the real 0x6B1 BMS broadcast layout (the HAL now prefers the BMS's
+     own 0xF00F SoC PID, so a wrong 0x6B1 guess no longer corrupts the
+     battery display - but the capture still tells us the truth)
+   - whether the controller's current field is signed (0xF00C from the BMS
+     now drives charging detection when fresh, for the same reason)
+   - whether gear needs the spec-noted "+1" display offset / what values
+     above 3 the nibble carries
+   - the OBD2 byte order (decode switched to big-endian 2026-08-30 per the
+     UDS standard; pack Ah reading ~68 in the vhal dump confirms it)
+   - replay fixtures for the harness (`moto_can_replay -f`)
 2. **Current odometer reading** from the old dashboard if the bike has been
    ridden since the Settings.json snapshot (115.413 km). Then:
    `adb shell setprop persist.vendor.motodash.odometer <metres>`

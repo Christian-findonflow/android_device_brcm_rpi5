@@ -109,3 +109,33 @@ pkill -f 'operator_proxy|openwrt_control_server|kernel_log_monitor|process_resta
 
 For boot-timing work, add `--extra_kernel_cmdline="log_buf_len=4M"` to the
 start command so the early kernel/init log survives to be read.
+
+## Ride capture (the fixture that settles the decode questions)
+
+The HAL can log every CAN frame it sees or sends, in `candump -l` format, to
+`/data/vendor/motodash/can-<epoch>.log`. Off by default.
+
+Enable: Dash Settings -> Diagnostics -> "Capture CAN traffic" (applies
+immediately, persists across reboots), or from adb:
+`adb shell setprop persist.vendor.motodash.cfg.can_capture 1` then restart
+the HAL (`adb shell stop vendor.vehicle-hal-motorcycle; start ...`).
+The file is synced every second, so a key-off power cut loses at most the
+last second of a ride. Capture stops itself at 256 MB.
+
+Retrieve (bike on home Wi-Fi, userdebug build):
+
+    adb connect <pi-ip>:5555
+    adb root
+    adb pull /data/vendor/motodash/ ride-capture/
+    adb shell dumpsys android.hardware.automotive.vehicle.IVehicle/default > ride-capture/vhal_dump.txt
+
+Drop the folder into `rpi android dash misc/`. Replay it anywhere:
+
+    moto_can_replay vcan0 -f ride-capture/can-<epoch>.log        # device or host
+    motorcycle_vhal_replay vcan0                                   # host, real decode
+
+What the first capture answers: the 0x6B1 broadcast layout (SoC/temp bytes),
+whether the controller's current field carries a sign, the gear nibble
+encoding above D, and the OBD2 byte order (pack Ah near 68 confirms
+big-endian). The OBD2 requests (0x7E0) and responses (0x7E8) are in the log
+too, as are our own 0x1026105A display reports.

@@ -7,3 +7,7 @@ service vendor.vehicle-hal-motorcycle /vendor/bin/hw/android.hardware.automotive
 # Restart Vehicle HAL after boot completes to ensure CAN interfaces are ready
 on property:sys.boot_completed=1
     restart vendor.vehicle-hal-motorcycle
+
+# CAN capture directory (persist.vendor.motodash.cfg.can_capture=1 writes here)
+on post-fs-data
+    mkdir /data/vendor/motodash 0770 vehicle_network system

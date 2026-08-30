@@ -33,4 +33,4 @@
 
 # GNSS HAL binary
 /vendor/bin/hw/android\.hardware\.gnss-service\.rpi5   u:object_r:hal_gnss_rpi5_exec:s0
-
+/data/vendor/motodash(/.*)?  u:object_r:motodash_data_file:s0

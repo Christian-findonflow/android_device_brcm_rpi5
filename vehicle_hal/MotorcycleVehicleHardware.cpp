@@ -89,6 +89,7 @@ MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
     if (mLinkWatchdogThread.joinable()) {
         mLinkWatchdogThread.join();
     }
+    closeCapture();
     if (mCanSocket >= 0) {
         close(mCanSocket);
     }
@@ -492,6 +493,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
 
     // Pack health and capacity
     addFloatVendorProp(VENDOR_PACK_SOH, 0.0f, 100.0f, 100.0f);           // State of Health %
+    addFloatVendorProp(VENDOR_PACK_CURRENT, -3276.7f, 3276.7f, 0.0f);   // BMS signed current, A (+discharge)
     addFloatVendorProp(VENDOR_PACK_DOD, 0.0f, 100.0f, 0.0f);             // Depth of Discharge %
     addFloatVendorProp(VENDOR_PACK_AMPHOURS, 0.0f, 500.0f, 100.0f);      // Capacity Ah
     addFloatVendorProp(VENDOR_PACK_RESISTANCE, 0.0f, 1000.0f, 0.0f);     // Resistance mOhm
@@ -633,6 +635,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addConfigProp(VENDOR_CFG_GPIO_HIGH_BEAM, false, 0.0f, mGpioHighBeamPin);
     addConfigProp(VENDOR_CFG_GPIO_ACTIVE_LOW, false, 0.0f, mGpioActiveLow.load() ? 1 : 0);
     addConfigProp(VENDOR_CFG_PACK_ENERGY_WH, true, mPackEnergyWh.load(), 0);
+    addConfigProp(VENDOR_CFG_CAN_CAPTURE, false, 0.0f, mCaptureEnabled.load() ? 1 : 0);
 
     // Standard display-unit properties. configArray lists the supported
     // VehicleUnit values, as the property docs require.
@@ -785,6 +788,7 @@ void logUnknownCanId(uint32_t canId, bool isExtended, const uint8_t* data) {
 }  // namespace
 
 void MotorcycleVehicleHardware::processCanFrame(const struct can_frame& frame) {
+    captureFrame(frame);
     uint32_t canId = frame.can_id & CAN_EFF_MASK;
     bool isExtended = (frame.can_id & CAN_EFF_FLAG) != 0;
 
@@ -863,7 +867,11 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
     setLinkBit(LINK_CONTROLLER, true);
     updateFaultFlags(errors, FAULT_MASK_CONTROLLER_STATUS);
     updateStatusFlags(statusAndGear & 0x0F);
-    updateChargingState(rpm, current);
+    {
+        constexpr int64_t kBmsCurrentFreshNs = 5LL * 1000000000LL;
+        bool bmsFresh = mLastBmsCurrentNs != 0 && (timestamp - mLastBmsCurrentNs) < kBmsCurrentFreshNs;
+        updateChargingState(rpm, bmsFresh ? mBmsCurrentA : current);
+    }
     float speedMps = calculateSpeedFromRpm(rpm);
     accumulateDistance(speedMps, timestamp);
     accumulateEnergy(voltage, current, speedMps, timestamp);
@@ -1006,8 +1014,12 @@ void MotorcycleVehicleHardware::processBmsData(const uint8_t* data) {
                   << " -> SOC=" << soc << "% Temp=" << batteryTemp << "°C (raw=" << (int)data[7] << ")";
     }
 
-    // Update Battery SoC
-    {
+    // Update Battery SoC - unless the BMS has answered 0xF00F recently, in
+    // which case that authoritative value stands and this inferred decode is
+    // only logged for the ride-capture comparison.
+    constexpr int64_t kPidSocFreshNs = 10LL * 1000000000LL;
+    bool pidSocFresh = mLastSocPidNs != 0 && (timestamp - mLastSocPidNs) < kPidSocFreshNs;
+    if (!pidSocFresh) {
         std::lock_guard<std::mutex> lock(mValuesMutex);
         auto& value = mCurrentValues[static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL)];
         float prevSoc = value.value.floatValues[0];
@@ -1021,8 +1033,10 @@ void MotorcycleVehicleHardware::processBmsData(const uint8_t* data) {
 
     // Re-project the range from the new SoC (both run on the CAN reader
     // thread, so mLastSocPercent needs no locking).
-    mLastSocPercent = static_cast<float>(soc);
-    publishRange(timestamp);
+    if (!pidSocFresh) {
+        mLastSocPercent = static_cast<float>(soc);
+        publishRange(timestamp);
+    }
 
     // Update Pack Amphours - disabled, broadcast data doesn't match spec
     // Will get from OBD2 PID 0xF010 instead
@@ -1100,6 +1114,7 @@ bool MotorcycleVehicleHardware::sendObd2Request(uint16_t pid) {
         return false;
     }
 
+    captureFrame(frame);
     return true;
 }
 
@@ -1133,6 +1148,33 @@ void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t
 
     // Parse response based on PID
     switch (pid) {
+        case BMS_PID_PACK_SOC: {
+            // Authoritative SoC (0.5%/bit). Outranks the 0x6B1 broadcast, whose
+            // byte layout is inferred from one observed frame.
+            if (dataLen >= 1) {
+                float soc = static_cast<float>(data[4]) * 0.5f;
+                mLastSocPidNs = elapsedRealtimeNano();
+                {
+                    std::lock_guard<std::mutex> lock(mValuesMutex);
+                    auto& value = mCurrentValues[static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL)];
+                    value.value.floatValues[0] = soc;
+                    value.timestamp = mLastSocPidNs;
+                    notifyPropertyChange(static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL), value);
+                }
+                mLastSocPercent = soc;
+                publishRange(mLastSocPidNs);
+            }
+            break;
+        }
+        case BMS_PID_PACK_CURRENT: {
+            if (dataLen >= 2) {
+                int16_t raw = static_cast<int16_t>((data[4] << 8) | data[5]);
+                mBmsCurrentA = raw * 0.1f;
+                mLastBmsCurrentNs = elapsedRealtimeNano();
+                updateBmsProperty(VENDOR_PACK_CURRENT, mBmsCurrentA);
+            }
+            break;
+        }
         case BMS_PID_PACK_SOH: {
             // 1 byte, direct percentage (no scaling per Orion spec)
             if (dataLen >= 1) {
@@ -1150,7 +1192,7 @@ void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t
         case BMS_PID_PACK_CYCLES: {
             // 2 bytes, direct count
             if (dataLen >= 2) {
-                int cycles = data[4] | (data[5] << 8);
+                int cycles = (data[4] << 8) | data[5];
                 updateBmsPropertyInt(VENDOR_PACK_CYCLES, cycles);
             }
             break;
@@ -1189,35 +1231,35 @@ void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t
         case BMS_PID_CELL_LOW: {
             // 2 bytes, 0.0001V resolution
             if (dataLen >= 2) {
-                int raw = data[4] | (data[5] << 8);
+                int raw = (data[4] << 8) | data[5];
                 updateBmsProperty(VENDOR_CELL_VOLTAGE_LOW, raw * 0.0001f);
             }
             break;
         }
         case BMS_PID_CELL_HIGH: {
             if (dataLen >= 2) {
-                int raw = data[4] | (data[5] << 8);
+                int raw = (data[4] << 8) | data[5];
                 updateBmsProperty(VENDOR_CELL_VOLTAGE_HIGH, raw * 0.0001f);
             }
             break;
         }
         case BMS_PID_CELL_AVG: {
             if (dataLen >= 2) {
-                int raw = data[4] | (data[5] << 8);
+                int raw = (data[4] << 8) | data[5];
                 updateBmsProperty(VENDOR_CELL_VOLTAGE_AVG, raw * 0.0001f);
             }
             break;
         }
         case BMS_PID_CELL_LOW_ID: {
             if (dataLen >= 2) {
-                int cellId = data[4] | (data[5] << 8);
+                int cellId = (data[4] << 8) | data[5];
                 updateBmsPropertyInt(VENDOR_CELL_LOW_ID, cellId);
             }
             break;
         }
         case BMS_PID_CELL_HIGH_ID: {
             if (dataLen >= 2) {
-                int cellId = data[4] | (data[5] << 8);
+                int cellId = (data[4] << 8) | data[5];
                 updateBmsPropertyInt(VENDOR_CELL_HIGH_ID, cellId);
             }
             break;
@@ -1225,14 +1267,14 @@ void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t
         case BMS_PID_CHARGE_LIMIT: {
             // 2 bytes, direct amps
             if (dataLen >= 2) {
-                int amps = data[4] | (data[5] << 8);
+                int amps = (data[4] << 8) | data[5];
                 updateBmsProperty(VENDOR_CHARGE_LIMIT, static_cast<float>(amps));
             }
             break;
         }
         case BMS_PID_DISCHARGE_LIMIT: {
             if (dataLen >= 2) {
-                int amps = data[4] | (data[5] << 8);
+                int amps = (data[4] << 8) | data[5];
                 updateBmsProperty(VENDOR_DISCHARGE_LIMIT, static_cast<float>(amps));
             }
             break;
@@ -1240,7 +1282,7 @@ void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t
         case BMS_PID_PACK_AMPHOURS: {
             // 2 bytes, 0.1Ah resolution
             if (dataLen >= 2) {
-                int raw = data[4] | (data[5] << 8);
+                int raw = (data[4] << 8) | data[5];
                 updateBmsProperty(VENDOR_PACK_AMPHOURS, raw * 0.1f);
             }
             break;
@@ -1248,7 +1290,7 @@ void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t
         case BMS_PID_PACK_RESISTANCE: {
             // 2 bytes, 0.01mOhm resolution
             if (dataLen >= 2) {
-                int raw = data[4] | (data[5] << 8);
+                int raw = (data[4] << 8) | data[5];
                 updateBmsProperty(VENDOR_PACK_RESISTANCE, raw * 0.01f);
             }
             break;
@@ -1292,32 +1334,29 @@ void MotorcycleVehicleHardware::bmsPollingThread() {
         BMS_PID_PACK_RESISTANCE,
     };
     
-    size_t pidIndex = 0;
-    bool firstPassDone = false;
-
-    while (mRunning) {
-        uint16_t pid = pollPids[pidIndex];
-
+    // SoC and signed current are polled every round (they drive the battery
+    // display and charging detection); the slow PIDs rotate one per round.
+    const uint16_t fastPids[] = {BMS_PID_PACK_SOC, BMS_PID_PACK_CURRENT};
+    auto query = [this](uint16_t pid) {
         if (sendObd2Request(pid)) {
-            // Wait for response (with timeout)
             std::unique_lock<std::mutex> lock(mObd2Mutex);
             mObd2ResponseCv.wait_for(lock, std::chrono::milliseconds(100),
                 [this] { return mObd2ResponseReceived || !mRunning; });
         }
-
+    };
+    size_t pidIndex = 0;
+    bool firstPassDone = false;
+    while (mRunning) {
+        for (uint16_t pid : fastPids) {
+            query(pid);
+        }
+        query(pollPids[pidIndex]);
         pidIndex = (pidIndex + 1) % pollPids.size();
         if (pidIndex == 0) {
             firstPassDone = true;
         }
-
-        // First pass runs back-to-back so every value is populated within a
-        // couple of seconds of boot instead of ~85s. Steady state paces one
-        // request per second: a full refresh every ~17s keeps slow-moving
-        // values fresh enough for temperature/cell warnings at trivial bus
-        // load, where the old 5s-per-PID cycle left them up to 85s stale.
-        if (!sleepUnlessStopping(firstPassDone ? 1000 : 100)) break;
+        if (!sleepUnlessStopping(firstPassDone ? 700 : 100)) break;
     }
-    
     LOG(INFO) << "BMS polling thread exiting";
 }
 
@@ -1410,7 +1449,9 @@ void MotorcycleVehicleHardware::sendDisplayReportIfDue(int64_t timestamp, float 
         if (++failCount % 100 == 1) {
             LOG(WARNING) << "Failed to send display report: " << strerror(errno);
         }
+        return;
     }
+    captureFrame(frame);
 }
 
 void MotorcycleVehicleHardware::setLinkBit(int32_t bit, bool alive) {
@@ -1595,6 +1636,80 @@ int MotorcycleVehicleHardware::mapGearToVehicleGear(int controllerGear) const {
     }
 }
 
+void MotorcycleVehicleHardware::captureFrame(const struct can_frame& frame) {
+    if (!mCaptureEnabled.load(std::memory_order_relaxed)) {
+        return;
+    }
+    // 256 MB is ~30 hours of this bus; stopping beats filling /data.
+    constexpr uint64_t kMaxCaptureBytes = 256ULL * 1024 * 1024;
+    constexpr int64_t kSyncIntervalNs = 1000000000LL;
+
+    std::lock_guard<std::mutex> lock(mCaptureMutex);
+    if (mCaptureFd < 0) {
+        struct timeval now;
+        gettimeofday(&now, nullptr);
+        std::string path = mCaptureDir + "/can-" + std::to_string(now.tv_sec) + ".log";
+        mCaptureFd = open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
+        if (mCaptureFd < 0) {
+            if (!mCaptureFailureLogged) {
+                LOG(ERROR) << "CAN capture: cannot open " << path << ": " << strerror(errno);
+                mCaptureFailureLogged = true;
+            }
+            return;
+        }
+        LOG(INFO) << "CAN capture started: " << path;
+        mCaptureBytes = 0;
+    }
+    if (mCaptureBytes >= kMaxCaptureBytes) {
+        return;
+    }
+
+    // candump -l format: (sec.usec) iface ID#DATA, 8 hex digits for extended
+    // IDs, 3 for standard - exactly what moto_can_replay -f consumes.
+    struct timeval now;
+    gettimeofday(&now, nullptr);
+    char line[96];
+    int len = snprintf(line, sizeof(line), "(%ld.%06ld) %s ", static_cast<long>(now.tv_sec),
+                       static_cast<long>(now.tv_usec), mCanInterface.c_str());
+    if (frame.can_id & CAN_EFF_FLAG) {
+        len += snprintf(line + len, sizeof(line) - len, "%08X#", frame.can_id & CAN_EFF_MASK);
+    } else {
+        len += snprintf(line + len, sizeof(line) - len, "%03X#", frame.can_id & CAN_SFF_MASK);
+    }
+    for (int i = 0; i < frame.can_dlc && i < 8; i++) {
+        len += snprintf(line + len, sizeof(line) - len, "%02X", frame.data[i]);
+    }
+    line[len++] = '\n';
+    if (write(mCaptureFd, line, len) != len) {
+        if (!mCaptureFailureLogged) {
+            LOG(ERROR) << "CAN capture: write failed: " << strerror(errno);
+            mCaptureFailureLogged = true;
+        }
+        return;
+    }
+    mCaptureBytes += len;
+    if (mCaptureBytes >= kMaxCaptureBytes) {
+        LOG(WARNING) << "CAN capture: size cap reached, capture stopped";
+    }
+    // Key-off is a power cut on the bike: sync often enough that a ride
+    // loses at most its last second.
+    int64_t nowNs = elapsedRealtimeNano();
+    if (nowNs - mLastCaptureSyncNs > kSyncIntervalNs) {
+        fdatasync(mCaptureFd);
+        mLastCaptureSyncNs = nowNs;
+    }
+}
+
+void MotorcycleVehicleHardware::closeCapture() {
+    std::lock_guard<std::mutex> lock(mCaptureMutex);
+    if (mCaptureFd >= 0) {
+        fdatasync(mCaptureFd);
+        close(mCaptureFd);
+        mCaptureFd = -1;
+        LOG(INFO) << "CAN capture closed after " << mCaptureBytes << " bytes";
+    }
+}
+
 void MotorcycleVehicleHardware::notifyPropertyChange(int32_t propId, const VehiclePropValue& value) {
     static int speedNotifyCount = 0;
     if (mOnPropertyChangeCallback) {
@@ -1723,6 +1838,15 @@ StatusCode MotorcycleVehicleHardware::applyConfigValue(const VehiclePropValue& v
             mTripResetRequested = true;
             LOG(INFO) << "Trip meter reset requested";
             return StatusCode::OK;
+        }
+        case VENDOR_CFG_CAN_CAPTURE: {
+            int32_t v;
+            if (!intArg(0, 1, &v)) return StatusCode::INVALID_ARG;
+            mCaptureEnabled = (v != 0);
+            if (v == 0) closeCapture();
+            persistConfig("persist.vendor.motodash.cfg.can_capture", std::to_string(v));
+            LOG(INFO) << "CAN capture " << (v ? "enabled" : "disabled");
+            break;
         }
         case VENDOR_CFG_PACK_ENERGY_WH: {
             float v;
@@ -1968,6 +2092,10 @@ void MotorcycleVehicleHardware::loadConfig() {
         }
     }
     LOG(INFO) << "Range model: whPerKm=" << mWhPerKm << " packWh=" << mPackEnergyWh.load();
+    if (property_get("persist.vendor.motodash.cfg.can_capture", propValue, "0") > 0) {
+        mCaptureEnabled = (atoi(propValue) != 0);
+        if (mCaptureEnabled) LOG(INFO) << "CAN capture enabled from persisted config";
+    }
 
     // Display units (metric defaults; persisted when the rider changes them)
     auto loadUnit = [&propValue](const char* name, int32_t a, int32_t b, int32_t* out) {
