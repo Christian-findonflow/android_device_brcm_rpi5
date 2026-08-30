@@ -131,6 +131,29 @@ the default TDA's top becomes empty/home. This also fixes the UX gap where
 HOME leaves the right panel grey. Implement in MotoSplitDisplayAreaController
 via a task stack listener, or extend HomeCockpitLauncherService.
 
+### Voice assistant (discussed 2026-08-30, parked until the platform is stable)
+Google's automotive stack (GAS: Maps, Assistant, Play) is OEM-licensed only;
+phone GMS can be sideloaded but is uncertified, RAM-hungry and laid out for
+phones - not worth it on this panel, and OsmAnd already beats Google Maps
+offline. The assistant we want is buildable without Google, and knows the
+bike:
+- Framework: a `VoiceInteractionService` app as the system assistant
+  (restore the bar's Assistant button, or trigger from a bar/headset PTT).
+- Audio: Bluetooth helmet headset (Cardo/Sena) for mic + speaker. Prove
+  this path first with OsmAnd voice guidance (recorded voices, no TTS
+  engine needed) - cheap and useful on its own.
+- Trigger: push-to-talk (headset button or the spare optoisolator channel -
+  the bar-controls decision), not a hotword; wind noise kills wake words.
+- STT: Vosk or Sherpa-ONNX offline. TTS: Piper via Sherpa-ONNX offline.
+- Brains, two tiers: local rules for the commands that must work offline
+  (navigate/home, call, play, "how far can I go" from RANGE_REMAINING,
+  "will I make it" from the arrival projection, "anything wrong" from
+  FAULT_FLAGS) wired to OsmAnd AIDL / dialer / media session / HAL props;
+  an optional cloud LLM tier when phone tethering is up, never a dependency.
+Order: BT headset + OsmAnd voice -> PTT decision -> offline assistant ->
+LLM tier (needs the BT-tethering item). Multi-week; after the ride
+capture and decode fixes.
+
 ### UX (from the 2026-08-29 evening review)
 - **Cluster turn-by-turn: IMPLEMENTED** (CarLauncher ad248b48) - OsmAnd V1
   AIDL client + cluster widget, verified on the simulator up to the last
