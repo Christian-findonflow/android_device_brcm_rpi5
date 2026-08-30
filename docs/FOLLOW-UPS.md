@@ -54,6 +54,19 @@ side-stand indicator, TESTING.md correction) is done.
 - **GPIO chip selection**: HAL probes gpiochip0 then gpiochip4 and takes
   whichever opens; on Pi 5 both exist. Make the chip path a
   persist.vendor.motodash property alongside the pins.
+- **CarSystemUIRpiOverlay flags.xml is a silent no-op**: the scalable_ui
+  booleans it sets to false are only the *fallback* path of CarSystemUI's
+  FlagManager - the compile-time aconfig flag
+  (com.android.systemui.car.Flags.scalableUi) resolves first and is true, so
+  ScalableUI is enabled on both products despite the overlay (confirmed
+  2026-08-30: PanelAutoTaskStackTransitionHandlerDelegate handles every
+  transition on the simulator). The overlay comment claims it prevents
+  TaskView-embedding interference; whatever problem that was, this file is
+  not what's holding it off. Either delete the file or, if the interference
+  is real, disable the aconfig flag in the product instead. Note: the
+  transition-confinement crop (2026-08-30) lives in that delegate's
+  startAnimation, so actually disabling ScalableUI would also disable the
+  crop and bring the cross-cluster slide back.
 
 ### Product hygiene
 - **Junk packages still ship** (KitchenSink, AdasLocationTestApp, Calendar,
