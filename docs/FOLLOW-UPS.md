@@ -1,8 +1,9 @@
 # NEO dashboard - follow-ups
 
-Living list. Updated 2026-08-29 (evening) - the hardening batch (shutdown
-latency, BMS cadence + vcan responder, charge-rate units, log gating,
-side-stand indicator, TESTING.md correction) is done.
+Living list. Updated 2026-08-30 - transition confinement, the rider batch
+(range model, arrival SoC, power bar, night dimming, trust patches), display
+units on every surface, and the app-grid touch fix are done; see the dated
+entries below and the git log of the three forks.
 
 ## Recently completed (for the record)
 
@@ -42,9 +43,7 @@ side-stand indicator, TESTING.md correction) is done.
    UI without touching the screen. Note: the optoisolator has a spare 4th
    input channel; more buttons would need a second board or a resistor-ladder
    ADC approach.
-4. **Git pushes** - pushes must run from your shell. `device/brcm/rpi5` is
-   typically the one with new commits after a session.
-5. *(Optional)* An **Orion BMS profile export** from the Orion utility, if you
+4. *(Optional)* An **Orion BMS profile export** from the Orion utility, if you
    have the cable/software - documents the broadcast layout independently of
    the ride capture.
 
