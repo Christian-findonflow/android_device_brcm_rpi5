@@ -634,6 +634,41 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addConfigProp(VENDOR_CFG_GPIO_ACTIVE_LOW, false, 0.0f, mGpioActiveLow.load() ? 1 : 0);
     addConfigProp(VENDOR_CFG_PACK_ENERGY_WH, true, mPackEnergyWh.load(), 0);
 
+    // Standard display-unit properties. configArray lists the supported
+    // VehicleUnit values, as the property docs require.
+    auto addUnitsProp = [this](VehicleProperty prop, int32_t initial,
+                               std::vector<int32_t> supported) {
+        VehiclePropConfig config;
+        config.prop = static_cast<int32_t>(prop);
+        config.access = VehiclePropertyAccess::READ_WRITE;
+        config.changeMode = VehiclePropertyChangeMode::ON_CHANGE;
+        config.configArray = std::move(supported);
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        areaConfig.access = VehiclePropertyAccess::READ_WRITE;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+
+        VehiclePropValue value;
+        value.prop = config.prop;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.int32Values.push_back(initial);
+        mCurrentValues[config.prop] = value;
+    };
+    addUnitsProp(VehicleProperty::VEHICLE_SPEED_DISPLAY_UNITS, mSpeedDisplayUnits,
+                 {static_cast<int32_t>(VehicleUnit::KILOMETERS_PER_HOUR),
+                  static_cast<int32_t>(VehicleUnit::MILES_PER_HOUR)});
+    addUnitsProp(VehicleProperty::DISTANCE_DISPLAY_UNITS, mDistanceDisplayUnits,
+                 {static_cast<int32_t>(VehicleUnit::KILOMETER),
+                  static_cast<int32_t>(VehicleUnit::MILE)});
+    // Temperature is a vendor prop - see VENDOR_CFG_TEMP_DISPLAY_UNITS in the
+    // header for why it cannot be the standard HVAC property.
+    addUnitsProp(static_cast<VehicleProperty>(VENDOR_CFG_TEMP_DISPLAY_UNITS),
+                 mTemperatureDisplayUnits,
+                 {static_cast<int32_t>(VehicleUnit::CELSIUS),
+                  static_cast<int32_t>(VehicleUnit::FAHRENHEIT)});
+
     LOG(INFO) << "Initialized " << mPropertyConfigs.size() << " property configs";
 }
 
@@ -1717,8 +1752,48 @@ StatusCode MotorcycleVehicleHardware::applyConfigValue(const VehiclePropValue& v
             persistConfig("persist.vendor.motodash.gpio.active_low", std::to_string(v));
             break;
         }
-        default:
+        default: {
+            // Display units: validate against the supported VehicleUnit pair
+            // and persist; the stored-value/notify tail below does the rest.
+            auto unitsArg = [&value](int32_t a, int32_t b, int32_t* out) {
+                if (value.value.int32Values.size() != 1) return false;
+                int32_t v = value.value.int32Values[0];
+                if (v != a && v != b) return false;
+                *out = v;
+                return true;
+            };
+            if (propId == static_cast<int32_t>(VehicleProperty::VEHICLE_SPEED_DISPLAY_UNITS)) {
+                if (!unitsArg(static_cast<int32_t>(VehicleUnit::KILOMETERS_PER_HOUR),
+                              static_cast<int32_t>(VehicleUnit::MILES_PER_HOUR),
+                              &mSpeedDisplayUnits)) {
+                    return StatusCode::INVALID_ARG;
+                }
+                persistConfig("persist.vendor.motodash.cfg.units_speed",
+                              std::to_string(mSpeedDisplayUnits));
+                break;
+            }
+            if (propId == static_cast<int32_t>(VehicleProperty::DISTANCE_DISPLAY_UNITS)) {
+                if (!unitsArg(static_cast<int32_t>(VehicleUnit::KILOMETER),
+                              static_cast<int32_t>(VehicleUnit::MILE),
+                              &mDistanceDisplayUnits)) {
+                    return StatusCode::INVALID_ARG;
+                }
+                persistConfig("persist.vendor.motodash.cfg.units_distance",
+                              std::to_string(mDistanceDisplayUnits));
+                break;
+            }
+            if (propId == VENDOR_CFG_TEMP_DISPLAY_UNITS) {
+                if (!unitsArg(static_cast<int32_t>(VehicleUnit::CELSIUS),
+                              static_cast<int32_t>(VehicleUnit::FAHRENHEIT),
+                              &mTemperatureDisplayUnits)) {
+                    return StatusCode::INVALID_ARG;
+                }
+                persistConfig("persist.vendor.motodash.cfg.units_temp",
+                              std::to_string(mTemperatureDisplayUnits));
+                break;
+            }
             return StatusCode::ACCESS_DENIED;
+        }
     }
 
     LOG(INFO) << "Config property 0x" << std::hex << propId << std::dec << " updated";
@@ -1893,6 +1968,24 @@ void MotorcycleVehicleHardware::loadConfig() {
         }
     }
     LOG(INFO) << "Range model: whPerKm=" << mWhPerKm << " packWh=" << mPackEnergyWh.load();
+
+    // Display units (metric defaults; persisted when the rider changes them)
+    auto loadUnit = [&propValue](const char* name, int32_t a, int32_t b, int32_t* out) {
+        *out = a;
+        if (property_get(name, propValue, "") > 0) {
+            int32_t v = atoi(propValue);
+            if (v == a || v == b) *out = v;
+        }
+    };
+    loadUnit("persist.vendor.motodash.cfg.units_speed",
+             static_cast<int32_t>(VehicleUnit::KILOMETERS_PER_HOUR),
+             static_cast<int32_t>(VehicleUnit::MILES_PER_HOUR), &mSpeedDisplayUnits);
+    loadUnit("persist.vendor.motodash.cfg.units_distance",
+             static_cast<int32_t>(VehicleUnit::KILOMETER),
+             static_cast<int32_t>(VehicleUnit::MILE), &mDistanceDisplayUnits);
+    loadUnit("persist.vendor.motodash.cfg.units_temp",
+             static_cast<int32_t>(VehicleUnit::CELSIUS),
+             static_cast<int32_t>(VehicleUnit::FAHRENHEIT), &mTemperatureDisplayUnits);
 
     LOG(INFO) << "Decode config: wheel=" << mWheelCircumference << "m ratio=" << mGearRatio
               << " canStatus=0x" << std::hex << mCanIdControllerStatus

@@ -118,6 +118,15 @@ constexpr int32_t LINK_BMS = 1 << 1;          // 0x6B1 or OBD2 responses flowing
 // Charging: standstill with sustained charge current. rpm==0 excludes regen,
 // which always coincides with the motor turning.
 constexpr int32_t VENDOR_CHARGING = 0x21400044;            // 0/1 (int32)
+
+// Temperature display unit (VehicleUnit CELSIUS/FAHRENHEIT). A vendor prop
+// rather than the standard HVAC_TEMPERATURE_DISPLAY_UNITS: that property is
+// owned by CarService's HVAC handling (CONTROL_CAR_CLIMATE to write, and
+// climate-specific plumbing on read), whereas every consumer here - launcher
+// and SystemUI - already reads vendor props via CAR_VENDOR_EXTENSION. Speed
+// and distance use the standard *_DISPLAY_UNITS properties (normal
+// READ_CAR_DISPLAY_UNITS / CONTROL_CAR_DISPLAY_UNITS permissions).
+constexpr int32_t VENDOR_CFG_TEMP_DISPLAY_UNITS = 0x21400045;
 constexpr float CHARGING_CURRENT_THRESHOLD_A = -0.5f;
 
 // Fault flags from the controller, combined into one bitfield so the UI needs
@@ -343,6 +352,14 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     // Samsung 35E 21s20p: 75.6V nominal x 70Ah = 5292Wh. Configurable via
     // VENDOR_CFG_PACK_ENERGY_WH; kept in sync with INFO_EV_BATTERY_CAPACITY.
     std::atomic<float> mPackEnergyWh{5292.0f};
+
+    // Display units (standard *_DISPLAY_UNITS properties). Pure pass-through
+    // settings: the settings UI writes them, every display surface (cluster,
+    // cockpit, SystemUI bar) subscribes, and the HAL persists them so a
+    // reboot keeps the rider's choice. The HAL itself always works in SI.
+    int32_t mSpeedDisplayUnits;        // VehicleUnit KILOMETERS_PER_HOUR / MILES_PER_HOUR
+    int32_t mDistanceDisplayUnits;     // VehicleUnit KILOMETER / MILE
+    int32_t mTemperatureDisplayUnits;  // VehicleUnit CELSIUS / FAHRENHEIT
     std::atomic<int64_t> mLastControllerFrameNs{0};
     std::atomic<int64_t> mLastBmsFrameNs{0};
     std::thread mLinkWatchdogThread;

@@ -138,6 +138,23 @@ via a task stack listener, or extend HomeCockpitLauncherService.
   bottom sheet renders mostly below the fold, leaving destination-setting
   awkward on the bike. Investigate OsmAnd display settings, or drive
   routing through our own UI via the AIDL navigate()/search calls.
+- **App grid dead to touch (FIXED 2026-08-30)**: taps and swipes on the
+  apps screen did nothing - almost certainly since the split display
+  existed. Root cause was not the grid: the cluster's home task runs in
+  fullscreen windowing mode, so the ActivityRecordInputSink the framework
+  attaches to it (touch-opaque activities, compat change
+  ENABLE_TOUCH_OPAQUE_ACTIVITIES) had an unbounded region; whenever the
+  cluster was z-ordered above a right-panel task (the grid let it take
+  focus, as does a HOME press) the sink ate every right-panel touch.
+  Diagnosed via `dumpsys input` window order + the
+  "Not sending touch gesture to ... ActivityRecordInputSink" log; confirmed
+  with `am compat disable`. Fix: CarLauncher (cluster host) calls
+  Activity#setActivityRecordInputSinkEnabled(false) (@hide, flag
+  allow_disable_activity_record_input_sink is ENABLED in bp4a). Also: grid
+  gets its own taskAffinity (no more cluster focus theft), vertical paging,
+  4x3 cells, reorder disabled, gentler snap/fling. Verified on the
+  simulator by screenshot diff: tap/fling/drag on fresh boot and after HOME.
+  Watch item: the grid resumes on its last page (stock behaviour).
 - **Speed limit on cluster**: not exposed by the V1 AIDL. The V2 package
   (net.osmand.aidlapi) is now vendored and bound (2026-08-30, for
   getAppInfo route polling), so check its surface for speed limit next -

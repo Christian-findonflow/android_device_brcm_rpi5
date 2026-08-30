@@ -105,6 +105,9 @@ class MotorcycleVehicleHardwareTest : public ::testing::Test {
         // in-process on the host - clear them BEFORE construction.
         property_set("persist.vendor.motodash.whperkm", "");
         property_set("persist.vendor.motodash.cfg.pack_energy_wh", "");
+        property_set("persist.vendor.motodash.cfg.units_speed", "");
+        property_set("persist.vendor.motodash.cfg.units_distance", "");
+        property_set("persist.vendor.motodash.cfg.units_temp", "");
         // Nonexistent interface: the reader thread stays in its retry loop and
         // never interferes; frames are injected through the peer instead.
         mHardware = std::make_unique<MotorcycleVehicleHardware>("vcan-test-none");
@@ -614,6 +617,25 @@ TEST_F(MotorcycleVehicleHardwareTest, RegenChunkExtendsRange) {
         mPeer->accumulateEnergy(kTestVoltage, -10.0f, kTestSpeedMps, t);
     }
     EXPECT_GT(lastEvent(PROP_RANGE)->value.floatValues[0], drivingRange);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, DisplayUnitsApplyAndValidate) {
+    const int32_t speedProp =
+            static_cast<int32_t>(VehicleProperty::VEHICLE_SPEED_DISPLAY_UNITS);
+    constexpr int32_t kMph = 0x90;   // VehicleUnit::MILES_PER_HOUR
+    constexpr int32_t kFahrenheit = 0x31;
+
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(speedProp, kMph)), StatusCode::OK);
+    auto speed = lastEvent(speedProp);
+    ASSERT_TRUE(speed.has_value());
+    EXPECT_EQ(speed->value.int32Values[0], kMph);
+
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_TEMP_DISPLAY_UNITS, kFahrenheit)),
+              StatusCode::OK);
+
+    // Anything outside the supported pair is rejected
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(speedProp, 0x21 /* METER */)),
+              StatusCode::INVALID_ARG);
 }
 
 TEST_F(MotorcycleVehicleHardwareTest, PackEnergyConfigAppliesAndValidates) {
