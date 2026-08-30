@@ -154,14 +154,26 @@ Order: BT headset + OsmAnd voice -> PTT decision -> offline assistant ->
 LLM tier (needs the BT-tethering item). Multi-week; after the ride
 capture and decode fixes.
 
-### Settings structure (implemented 2026-08-30, device verification pending - build host unstable)
+### Settings structure (DONE 2026-08-30, verified on the simulator)
 Rider settings (units, night brightness, trip reset) are open to anyone and
 sized for gloves; Workshop settings (wheel, drivetrain, battery, CAN, GPIO,
 diagnostics) sit behind a passcode set in Workshop itself (open until one is
 set; salted SHA-256 in launcher prefs - keeps passengers out, not adb).
 Rider is reachable from the cockpit gear and injected into native
 CarSettings' homepage device group via settingslib's extra-settings
-meta-data on RiderSettingsActivity.
+meta-data on RiderSettingsActivity. Both settings activities carry their
+own taskAffinity so a source-less launch can't land them in the cluster
+TDA (the app-grid lesson).
+
+### In-place app updates: CarService caveat (found 2026-08-30)
+`adb install -r` of CarLauncher over the system copy works (the package
+resolves to /data/app afterwards) and is the cheap OTA-lite path - but
+CarService crashes on the PACKAGE_ADDED broadcast: VendorServiceController
+restarts the launcher's HomeCockpitLauncherService from a background
+context and hits BackgroundServiceStartNotAllowedException (it recovers
+after restart). Before relying on APK updates in the field, either make the
+cockpit launcher a bound vendor service (bind= in the CarService overlay's
+config_earlyStartupServices) or move its work elsewhere.
 
 ### UX (from the 2026-08-29 evening review)
 - **Cluster turn-by-turn: IMPLEMENTED** (CarLauncher ad248b48) - OsmAnd V1
