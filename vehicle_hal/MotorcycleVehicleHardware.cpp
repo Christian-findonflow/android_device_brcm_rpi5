@@ -184,6 +184,29 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
         mCurrentValues[config.prop] = value;
     }
 
+    // PARKING_BRAKE_ON - derived from gear: P = brake on, R/N/D = off. The
+    // bike has no parking-brake switch, but CarDrivingStateService refuses to
+    // initialize without this property, which left the whole driving-state
+    // layer (and every UX restriction) permanently inert. Boot default is ON
+    // so an unknown gear reads as parked.
+    {
+        VehiclePropConfig config;
+        config.prop = static_cast<int32_t>(VehicleProperty::PARKING_BRAKE_ON);
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::ON_CHANGE;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+
+        VehiclePropValue value;
+        value.prop = config.prop;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.int32Values.push_back(1);  // parked until the controller says otherwise
+        mCurrentValues[config.prop] = value;
+    }
+
     // EV_BATTERY_LEVEL - Battery State of Charge (%)
     {
         VehiclePropConfig config;
@@ -895,6 +918,21 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
             selValue.value.int32Values[0] = vehicleGear;
             selValue.timestamp = timestamp;
             notifyPropertyChange(static_cast<int32_t>(VehicleProperty::GEAR_SELECTION), selValue);
+        }
+    }
+
+    // Parking brake follows the gear: P = on, anything else = off. Published
+    // outside the gear-change branch above so a boot straight into N (gear
+    // equal to the default) still drops the brake on the first frame.
+    {
+        int32_t brake = (gear == GEAR_PARK) ? 1 : 0;
+        std::lock_guard<std::mutex> lock(mValuesMutex);
+        auto& brakeValue = mCurrentValues[static_cast<int32_t>(VehicleProperty::PARKING_BRAKE_ON)];
+        if (brakeValue.value.int32Values[0] != brake) {
+            LOG(INFO) << "Parking brake (gear-derived): " << (brake ? "ON" : "OFF");
+            brakeValue.value.int32Values[0] = brake;
+            brakeValue.timestamp = timestamp;
+            notifyPropertyChange(static_cast<int32_t>(VehicleProperty::PARKING_BRAKE_ON), brakeValue);
         }
     }
 

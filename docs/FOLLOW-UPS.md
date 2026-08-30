@@ -37,17 +37,17 @@ entries below and the git log of the three forks.
 
 ## Blocked on Christian (things only you can do)
 
-- **Riding lockout policy** (found via the 2026-08-30 simulated ride): the
-  platform's driving-state layer is INERT - our VHAL doesn't implement
-  PARKING_BRAKE_ON, so CarDrivingStateService fails init at boot ("Driving
-  state will always be fully restrictive" - except the restriction plumbing
-  never engages either). Net effect today: NOTHING locks while moving -
-  keyboard, app grid, settings all usable at speed. Decide: (a) keep it
-  inert (rider judgment, current behavior, zero work), or (b) implement
-  PARKING_BRAKE_ON=false in the HAL *together with* a motorcycle
-  car_ux_restrictions config - never alone, because the default config
-  demands distraction-optimized apps while moving and would BLOCK OsmAnd
-  and music at speed.
+- **Riding lockout policy - DECIDED & IMPLEMENTED 2026-08-30 (Christian:
+  gear-linked)**: the VHAL now derives PARKING_BRAKE_ON from the gear (P = on,
+  R/N/D = off, boot default on), which lets CarDrivingStateService initialize,
+  and car-services ships a motorcycle car_ux_restrictions_map.xml that is
+  explicitly permissive while idling/moving (requiresDO=false, uxr=baseline) -
+  the parser promotes any non-baseline uxr to requiresDO=true, and requiresDO
+  blocks every non-distraction-optimized activity (OsmAnd, music, the whole
+  dashboard), so config-level restrictions are all-or-nothing. If a keyboard
+  lock at speed is ever wanted, do it app-side: CarLatinIME can listen to
+  CarDrivingStateManager directly (driving state is now real) and flip its
+  existing lockout view.
 
 1. **Ride capture from the bike** - the single most valuable input, and
    now one switch away: Dash Settings -> Diagnostics -> "Capture CAN
@@ -259,7 +259,8 @@ config_earlyStartupServices) or move its work elsewhere.
   charging BAR FILLS keep their last width on a dead link (the text goes
   "--"); blank or dim the fills too. Same class (simulated ride, 2026-08-30): the
   cockpit TEMPERATURES and PACK HEALTH cards keep stale values on a dead
-  link while the SystemUI chips blank correctly.
+  link while the SystemUI chips blank correctly (FIXED 2026-08-30: the
+  cards now link-gate to "--" like the chips; bar fills still pending).
 - **Ride summary** on key-off / next boot (distance, time, average Wh/km) -
   data now exists; also feeds the learned range model.
 - **OsmAnd first-run**: pre-seed config or ship a region map (~1 GB image

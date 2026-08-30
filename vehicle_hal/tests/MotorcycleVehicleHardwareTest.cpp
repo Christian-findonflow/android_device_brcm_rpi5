@@ -62,6 +62,8 @@ namespace {
 constexpr int32_t PROP_ENGINE_RPM = static_cast<int32_t>(VehicleProperty::ENGINE_RPM);
 constexpr int32_t PROP_SPEED = static_cast<int32_t>(VehicleProperty::PERF_VEHICLE_SPEED);
 constexpr int32_t PROP_CURRENT_GEAR = static_cast<int32_t>(VehicleProperty::CURRENT_GEAR);
+constexpr int32_t PROP_PARKING_BRAKE =
+        static_cast<int32_t>(VehicleProperty::PARKING_BRAKE_ON);
 constexpr int32_t PROP_CHARGE_RATE =
         static_cast<int32_t>(VehicleProperty::EV_BATTERY_INSTANTANEOUS_CHARGE_RATE);
 constexpr int32_t PROP_COOLANT = static_cast<int32_t>(VehicleProperty::ENGINE_COOLANT_TEMP);
@@ -200,6 +202,38 @@ TEST_F(MotorcycleVehicleHardwareTest, ControllerStatusDecodesRpmSpeedGearPower) 
     auto power = lastEvent(PROP_CHARGE_RATE);
     ASSERT_TRUE(power.has_value());
     EXPECT_NEAR(power->value.floatValues[0], -(72.0f * 25.5f) * 1000.0f, 500.0f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, ParkingBrakeFollowsGear) {
+    // The bike has no parking-brake switch: the HAL derives PARKING_BRAKE_ON
+    // from the gear so CarDrivingStateService can initialize. P = on,
+    // anything else = off; boot default is on (unknown = parked).
+
+    // Gear D -> brake released (changes from the boot default of ON).
+    auto drive = makeFrame(CAN_ID_CONTROLLER_STATUS, /*extended=*/true,
+                           {0x00, 0x30, 0x00, 0x00, 0xD0, 0x02, 0x00, 0x00});
+    mPeer->processCanFrame(drive);
+    auto brake = lastEvent(PROP_PARKING_BRAKE);
+    ASSERT_TRUE(brake.has_value());
+    EXPECT_EQ(brake->value.int32Values[0], 0);
+
+    // Gear P (upper nibble 0) -> brake on again.
+    auto park = makeFrame(CAN_ID_CONTROLLER_STATUS, /*extended=*/true,
+                          {0x00, 0x00, 0x00, 0x00, 0xD0, 0x02, 0x00, 0x00});
+    mPeer->processCanFrame(park);
+    brake = lastEvent(PROP_PARKING_BRAKE);
+    ASSERT_TRUE(brake.has_value());
+    EXPECT_EQ(brake->value.int32Values[0], 1);
+
+    // Neutral -> off. N equals no boot-default change for the GEAR property,
+    // but the brake must still drop: it is published outside the gear-change
+    // branch precisely for this case.
+    auto neutral = makeFrame(CAN_ID_CONTROLLER_STATUS, /*extended=*/true,
+                             {0x00, 0x20, 0x00, 0x00, 0xD0, 0x02, 0x00, 0x00});
+    mPeer->processCanFrame(neutral);
+    brake = lastEvent(PROP_PARKING_BRAKE);
+    ASSERT_TRUE(brake.has_value());
+    EXPECT_EQ(brake->value.int32Values[0], 0);
 }
 
 TEST_F(MotorcycleVehicleHardwareTest, RegenCurrentIsSigned) {

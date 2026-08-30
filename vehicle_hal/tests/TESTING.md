@@ -157,7 +157,10 @@ settles), odometer + trip advancing by exactly the integrated distance, and
 the full trust cascade blanking every surface a few seconds after the last
 frame. Note the SoC step (60 -> 59) exercises the arrival-SoC projection too.
 
-Platform caveat found this way: CarDrivingStateService logs "Required
-property not supported: 287310850" (PARKING_BRAKE_ON) at boot and never
-leaves UNKNOWN, so UX restrictions are INERT - nothing locks at speed,
-including the keyboard. See FOLLOW-UPS "Riding lockout policy".
+The driving-state layer is live as of 2026-08-30: the HAL derives
+PARKING_BRAKE_ON from the gear (P = on, boot default on), so the replay
+moves the platform through IDLING -> MOVING -> (a single gear-P frame)
+PARKED - watch with `dumpsys car_service | grep 'Current Driving State'`.
+UX restrictions stay explicitly permissive while moving (motorcycle
+car_ux_restrictions_map.xml in car-services): nothing locks at speed by
+design - see FOLLOW-UPS "Riding lockout policy" for the reasoning.
