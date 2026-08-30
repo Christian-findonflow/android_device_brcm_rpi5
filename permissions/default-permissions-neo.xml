@@ -14,6 +14,9 @@
 <exceptions>
     <exception package="com.android.car.carlauncher">
         <permission name="android.car.permission.READ_CAR_EXTERIOR_LIGHTS" fixed="false"/>
+        <!-- Night dimming: twilight is computed from the last known GPS fix -->
+        <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false"/>
+        <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false"/>
     </exception>
     <exception package="com.android.systemui">
         <permission name="android.car.permission.READ_CAR_EXTERIOR_LIGHTS" fixed="false"/>

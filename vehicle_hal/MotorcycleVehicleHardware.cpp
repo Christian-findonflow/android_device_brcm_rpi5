@@ -242,7 +242,30 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
         value.prop = config.prop;
         value.areaId = 0;
         value.timestamp = elapsedRealtimeNano();
-        value.value.floatValues.push_back(7200.0f);  // 72V * 100Ah = 7200Wh
+        value.value.floatValues.push_back(mPackEnergyWh.load());
+        mCurrentValues[config.prop] = value;
+    }
+
+    // RANGE_REMAINING - Estimated remaining range in meters. Computed from
+    // the learned Wh/km consumption EMA and remaining pack energy; 0 until
+    // the model has learned a consumption figure (the UI shows "--").
+    {
+        VehiclePropConfig config;
+        config.prop = static_cast<int32_t>(VehicleProperty::RANGE_REMAINING);
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::CONTINUOUS;
+        config.minSampleRate = 0.1f;
+        config.maxSampleRate = 10.0f;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+
+        VehiclePropValue value;
+        value.prop = config.prop;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.floatValues.push_back(0.0f);
         mCurrentValues[config.prop] = value;
     }
 
@@ -609,6 +632,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addConfigProp(VENDOR_CFG_GPIO_RIGHT_TURN, false, 0.0f, mGpioRightTurnPin);
     addConfigProp(VENDOR_CFG_GPIO_HIGH_BEAM, false, 0.0f, mGpioHighBeamPin);
     addConfigProp(VENDOR_CFG_GPIO_ACTIVE_LOW, false, 0.0f, mGpioActiveLow.load() ? 1 : 0);
+    addConfigProp(VENDOR_CFG_PACK_ENERGY_WH, true, mPackEnergyWh.load(), 0);
 
     LOG(INFO) << "Initialized " << mPropertyConfigs.size() << " property configs";
 }
@@ -807,6 +831,7 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
     updateChargingState(rpm, current);
     float speedMps = calculateSpeedFromRpm(rpm);
     accumulateDistance(speedMps, timestamp);
+    accumulateEnergy(voltage, current, speedMps, timestamp);
     publishDistance(timestamp);
     persistDistanceIfDue(timestamp, /*force=*/false);
     sendDisplayReportIfDue(timestamp, speedMps);
@@ -958,6 +983,11 @@ void MotorcycleVehicleHardware::processBmsData(const uint8_t* data) {
         }
         notifyPropertyChange(static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL), value);
     }
+
+    // Re-project the range from the new SoC (both run on the CAN reader
+    // thread, so mLastSocPercent needs no locking).
+    mLastSocPercent = static_cast<float>(soc);
+    publishRange(timestamp);
 
     // Update Pack Amphours - disabled, broadcast data doesn't match spec
     // Will get from OBD2 PID 0xF010 instead
@@ -1265,6 +1295,22 @@ constexpr int64_t kPersistIntervalNs = 30LL * 1000000000LL;
 // Ignore implausible gaps (first frame after boot, or a pause in traffic) so a
 // stale timestamp cannot add a large bogus distance in one step.
 constexpr int64_t kMaxDistanceStepNs = 1000000000LL;
+// Range model: consumption is learned per completed distance chunk and folded
+// into an EMA. 200m chunks with alpha 0.1 give a time constant of ~2km, slow
+// enough to ride out a single overtake, fast enough to notice a headwind.
+constexpr double kRangeChunkMeters = 200.0;
+constexpr float kWhPerKmEmaAlpha = 0.1f;
+// A chunk outside these bounds is discarded as a decode glitch rather than
+// folded into the average. Net-regen chunks (long downhill) clamp to the
+// minimum instead of going negative.
+constexpr float kMinChunkWhPerKm = 0.0f;
+constexpr float kMaxChunkWhPerKm = 500.0f;
+// Below this learned consumption the projection would be absurd (and divide
+// toward infinity); treat the model as not yet trustworthy.
+constexpr float kMinUsableWhPerKm = 5.0f;
+// Only integrate energy while actually moving: charging at standstill would
+// otherwise pour negative energy into the open chunk and poison the average.
+constexpr float kEnergyIntegrationMinSpeedMps = 0.5f;
 }  // namespace
 
 void MotorcycleVehicleHardware::updateFaultFlags(int32_t newBits, int32_t mask) {
@@ -1401,6 +1447,56 @@ void MotorcycleVehicleHardware::accumulateDistance(float speedMps, int64_t times
     mTripMeters += metres;
 }
 
+void MotorcycleVehicleHardware::accumulateEnergy(float voltage, float current, float speedMps,
+                                                 int64_t timestamp) {
+    int64_t deltaNs = timestamp - mLastEnergyTimestamp;
+    mLastEnergyTimestamp = timestamp;
+    if (deltaNs <= 0 || deltaNs > kMaxDistanceStepNs
+            || speedMps < kEnergyIntegrationMinSpeedMps) {
+        return;
+    }
+    if (mChunkStartMeters < 0.0) {
+        mChunkStartMeters = mOdometerMeters;
+    }
+
+    // Positive current = discharge, so V*I is consumption; regen while moving
+    // subtracts, which is exactly what it does to real consumption.
+    double dtHours = static_cast<double>(deltaNs) / 3.6e12;
+    mChunkEnergyWh += static_cast<double>(voltage) * static_cast<double>(current) * dtHours;
+
+    double chunkMeters = mOdometerMeters - mChunkStartMeters;
+    if (chunkMeters < kRangeChunkMeters) {
+        return;
+    }
+    float chunkWhPerKm = static_cast<float>(mChunkEnergyWh / (chunkMeters / 1000.0));
+    mChunkEnergyWh = 0.0;
+    mChunkStartMeters = mOdometerMeters;
+    if (chunkWhPerKm > kMaxChunkWhPerKm) {
+        LOG(WARNING) << "Discarding implausible consumption chunk: " << chunkWhPerKm << " Wh/km";
+        return;
+    }
+    if (chunkWhPerKm < kMinChunkWhPerKm) {
+        chunkWhPerKm = kMinChunkWhPerKm;
+    }
+    mWhPerKm = (mWhPerKm > 0.0f)
+            ? mWhPerKm * (1.0f - kWhPerKmEmaAlpha) + chunkWhPerKm * kWhPerKmEmaAlpha
+            : chunkWhPerKm;
+    publishRange(timestamp);
+}
+
+void MotorcycleVehicleHardware::publishRange(int64_t timestamp) {
+    float rangeMeters = 0.0f;  // 0 = unknown; the UI shows "--"
+    if (mWhPerKm >= kMinUsableWhPerKm && mLastSocPercent >= 0.0f) {
+        float remainingWh = (mLastSocPercent / 100.0f) * mPackEnergyWh.load();
+        rangeMeters = remainingWh / mWhPerKm * 1000.0f;
+    }
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto& value = mCurrentValues[static_cast<int32_t>(VehicleProperty::RANGE_REMAINING)];
+    value.value.floatValues[0] = rangeMeters;
+    value.timestamp = timestamp;
+    notifyPropertyChange(static_cast<int32_t>(VehicleProperty::RANGE_REMAINING), value);
+}
+
 void MotorcycleVehicleHardware::publishDistance(int64_t timestamp) {
     std::lock_guard<std::mutex> lock(mValuesMutex);
 
@@ -1432,6 +1528,12 @@ void MotorcycleVehicleHardware::persistDistanceIfDue(int64_t timestamp, bool for
                   std::to_string(static_cast<long long>(mOdometerMeters)));
     persistConfig("persist.vendor.motodash.trip",
                   std::to_string(static_cast<long long>(mTripMeters)));
+    // The learned consumption rides along on the odometer's persist cycle so
+    // a fresh boot starts with last ride's Wh/km instead of relearning.
+    if (mWhPerKm > 0.0f && std::abs(mWhPerKm - mPersistedWhPerKm) > 0.5f) {
+        persistConfig("persist.vendor.motodash.whperkm", std::to_string(mWhPerKm));
+        mPersistedWhPerKm = mWhPerKm;
+    }
     mPersistedOdometerMeters = mOdometerMeters;
     mPersistedTripMeters = mTripMeters;
     mLastPersistTimestamp = timestamp;
@@ -1586,6 +1688,27 @@ StatusCode MotorcycleVehicleHardware::applyConfigValue(const VehiclePropValue& v
             mTripResetRequested = true;
             LOG(INFO) << "Trip meter reset requested";
             return StatusCode::OK;
+        }
+        case VENDOR_CFG_PACK_ENERGY_WH: {
+            float v;
+            if (!floatArg(CFG_MIN_PACK_ENERGY_WH, CFG_MAX_PACK_ENERGY_WH, &v)) {
+                return StatusCode::INVALID_ARG;
+            }
+            mPackEnergyWh = v;
+            persistConfig("persist.vendor.motodash.cfg.pack_energy_wh", std::to_string(v));
+            // Mirror into INFO_EV_BATTERY_CAPACITY so standard consumers agree.
+            // The range itself re-projects on the next BMS frame (the model
+            // state is owned by the CAN reader thread; don't touch it here).
+            {
+                std::lock_guard<std::mutex> lock(mValuesMutex);
+                auto& cap = mCurrentValues[static_cast<int32_t>(
+                        VehicleProperty::INFO_EV_BATTERY_CAPACITY)];
+                cap.value.floatValues[0] = v;
+                cap.timestamp = elapsedRealtimeNano();
+                notifyPropertyChange(
+                        static_cast<int32_t>(VehicleProperty::INFO_EV_BATTERY_CAPACITY), cap);
+            }
+            break;
         }
         case VENDOR_CFG_GPIO_ACTIVE_LOW: {
             int32_t v;
@@ -1752,6 +1875,24 @@ void MotorcycleVehicleHardware::loadConfig() {
     mPersistedTripMeters = mTripMeters;
     LOG(INFO) << "Restored odometer=" << (mOdometerMeters / 1000.0) << "km trip="
               << (mTripMeters / 1000.0) << "km";
+
+    // Range model: learned consumption and configured pack energy
+    if (property_get("persist.vendor.motodash.whperkm", propValue, "") > 0) {
+        float v = strtof(propValue, nullptr);
+        if (v >= kMinUsableWhPerKm && v <= kMaxChunkWhPerKm) {
+            mWhPerKm = v;
+            mPersistedWhPerKm = v;
+        }
+    }
+    if (property_get("persist.vendor.motodash.cfg.pack_energy_wh", propValue, "") > 0) {
+        float v = strtof(propValue, nullptr);
+        if (v >= CFG_MIN_PACK_ENERGY_WH && v <= CFG_MAX_PACK_ENERGY_WH) {
+            mPackEnergyWh = v;
+        } else {
+            LOG(WARNING) << "Ignoring out-of-range pack_energy_wh: " << propValue;
+        }
+    }
+    LOG(INFO) << "Range model: whPerKm=" << mWhPerKm << " packWh=" << mPackEnergyWh.load();
 
     LOG(INFO) << "Decode config: wheel=" << mWheelCircumference << "m ratio=" << mGearRatio
               << " canStatus=0x" << std::hex << mCanIdControllerStatus

@@ -82,13 +82,21 @@ side-stand indicator, TESTING.md correction) is done.
   or retire the repo.
 
 ### Features
-- **Real range model (item 4)**: live pack Ah x nominal V derated by SoH from
-  the OBD2 data, learned Wh/km from the odometer we now have, instead of the
-  hardcoded 5292 Wh / 50 Wh/km in HomeCockpitActivity. Better after the ride
-  capture but the plumbing can start now.
+- **Range model refinements** (base model DONE 2026-08-30: HAL learns a Wh/km
+  EMA over 200m chunks, publishes RANGE_REMAINING, pack energy configurable
+  via VENDOR_CFG_PACK_ENERGY_WH / settings UI; cluster + cockpit + arrival
+  projection consume it). Remaining ideas: derate pack energy by SoH from the
+  OBD2 data; seed Wh/km per riding profile; validate the EMA constants
+  against the ride capture.
 - **GPS speed cross-check (item 5)**: compare PERF_VEHICLE_SPEED against GNSS
   speed; flag drift (wrong sprocket config, wheel slip). GNSS HAL already in
   the build.
+- **Night dimming (DONE 2026-08-30, unverified on hardware)**: launcher-side
+  NightBrightnessController computes solar elevation from the last GPS fix
+  and writes Settings.System screen brightness on band changes; CarService
+  forwards to VHAL DISPLAY_BRIGHTNESS -> sysfs backlight. Verify the full
+  chain on the Pi (the simulator has no backlight); night level tunable via
+  persist.vendor.motodash.night_brightness.
 - **Fault detail screen**: banner tap -> full-screen fault list with
   plain-language explanations and "what to do".
 - **Boot time**: measured on the simulator 2026-08-29. Warm boot (the key-on
@@ -130,8 +138,10 @@ via a task stack listener, or extend HomeCockpitLauncherService.
   bottom sheet renders mostly below the fold, leaving destination-setting
   awkward on the bike. Investigate OsmAnd display settings, or drive
   routing through our own UI via the AIDL navigate()/search calls.
-- **Speed limit on cluster**: not exposed by the V1 AIDL we vendored; the
-  V2 package (net.osmand.aidlapi) may differ - check before building.
+- **Speed limit on cluster**: not exposed by the V1 AIDL. The V2 package
+  (net.osmand.aidlapi) is now vendored and bound (2026-08-30, for
+  getAppInfo route polling), so check its surface for speed limit next -
+  the plumbing cost is already paid.
 - **Ignition-sense power story**: orderly shutdown (or suspend, if the Pi 5
   can) driven by an ignition input on the spare 4th optoisolator channel.
   Hardware decision needed first - see "Blocked on Christian".
@@ -148,8 +158,11 @@ via a task stack listener, or extend HomeCockpitLauncherService.
   matrices) do NOT apply to Android - use
   ro.surface_flinger.primary_display_orientation plus a touch orientation
   remap instead. Decide when the case design is final.
-- **Charging view refinements**: yield to a dead controller link (currently
-  latches the last state); link-gate the bottom-bar V/A chips in SystemUI.
+- **Charging view refinements (DONE 2026-08-30)**: takeover now yields to a
+  dead controller link and its SoC blanks without BMS; bottom-bar V/A, temp
+  and battery chips link-gate to "--". Cosmetic remainder: the battery and
+  charging BAR FILLS keep their last width on a dead link (the text goes
+  "--"); blank or dim the fills too.
 - **Ride summary** on key-off / next boot (distance, time, average Wh/km) -
   data now exists; also feeds the learned range model.
 - **OsmAnd first-run**: pre-seed config or ship a region map (~1 GB image

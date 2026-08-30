@@ -159,10 +159,15 @@ constexpr int32_t VENDOR_CFG_GPIO_LEFT_TURN = 0x21400035;    // BCM pin, -1 = di
 constexpr int32_t VENDOR_CFG_GPIO_RIGHT_TURN = 0x21400036;   // BCM pin, -1 = disabled (needs reboot)
 constexpr int32_t VENDOR_CFG_GPIO_HIGH_BEAM = 0x21400037;    // BCM pin, -1 = disabled (needs reboot)
 constexpr int32_t VENDOR_CFG_GPIO_ACTIVE_LOW = 0x21400038;   // 0/1 (applies live)
+// Usable pack energy in Wh. Drives the RANGE_REMAINING estimate and is
+// mirrored into INFO_EV_BATTERY_CAPACITY. Applies live.
+constexpr int32_t VENDOR_CFG_PACK_ENERGY_WH = 0x21600039;
 
 // Validation limits for writable configuration
 constexpr float CFG_MIN_WHEEL_CIRCUMFERENCE_M = 0.5f;
 constexpr float CFG_MAX_WHEEL_CIRCUMFERENCE_M = 5.0f;
+constexpr float CFG_MIN_PACK_ENERGY_WH = 500.0f;
+constexpr float CFG_MAX_PACK_ENERGY_WH = 50000.0f;
 constexpr float CFG_MIN_GEAR_RATIO = 0.5f;
 constexpr float CFG_MAX_GEAR_RATIO = 30.0f;
 constexpr int32_t CFG_MAX_CAN_ID = 0x1FFFFFFF;  // 29-bit extended ID space
@@ -234,6 +239,11 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void accumulateDistance(float speedMps, int64_t timestamp);
     void publishDistance(int64_t timestamp);
     void persistDistanceIfDue(int64_t timestamp, bool force);
+    // Range model (CAN reader thread only): integrates battery power over the
+    // controller frames, folds each completed distance chunk into a Wh/km
+    // EMA, and projects RANGE_REMAINING from the remaining pack energy.
+    void accumulateEnergy(float voltage, float current, float speedMps, int64_t timestamp);
+    void publishRange(int64_t timestamp);
     void updateStatusFlags(int32_t bits);
     void updateChargingState(int rpm, float current);
     // Called by the watchdog (and tests, with an explicit now) to drop link
@@ -320,6 +330,19 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int32_t mStatusFlags = 0;
     int32_t mLinkStatus = 0;
     int32_t mCharging = 0;
+
+    // Range model state (CAN reader thread only). mWhPerKm is the learned
+    // consumption EMA; 0 means "not yet learned" and suppresses the range
+    // estimate rather than inventing one. Persisted alongside the odometer.
+    double mChunkEnergyWh = 0.0;
+    double mChunkStartMeters = -1.0;
+    int64_t mLastEnergyTimestamp = 0;
+    float mWhPerKm = 0.0f;
+    float mPersistedWhPerKm = 0.0f;
+    float mLastSocPercent = -1.0f;
+    // Samsung 35E 21s20p: 75.6V nominal x 70Ah = 5292Wh. Configurable via
+    // VENDOR_CFG_PACK_ENERGY_WH; kept in sync with INFO_EV_BATTERY_CAPACITY.
+    std::atomic<float> mPackEnergyWh{5292.0f};
     std::atomic<int64_t> mLastControllerFrameNs{0};
     std::atomic<int64_t> mLastBmsFrameNs{0};
     std::thread mLinkWatchdogThread;

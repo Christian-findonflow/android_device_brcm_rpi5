@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cutils/properties.h>
 #include <utils/SystemClock.h>
 
 #include <linux/can.h>
@@ -39,6 +40,15 @@ class MotorcycleVehicleHardwareTestPeer {
 
     void checkLinkTimeouts(int64_t nowNs) { mHw->checkLinkTimeouts(nowNs); }
 
+    // Range-model entry points take explicit timestamps, so tests can drive
+    // them with synthetic time instead of depending on wall-clock spacing.
+    void accumulateDistance(float speedMps, int64_t ts) { mHw->accumulateDistance(speedMps, ts); }
+    void accumulateEnergy(float voltage, float current, float speedMps, int64_t ts) {
+        mHw->accumulateEnergy(voltage, current, speedMps, ts);
+    }
+    void publishRange(int64_t ts) { mHw->publishRange(ts); }
+    void setLastSoc(float soc) { mHw->mLastSocPercent = soc; }
+
   private:
     MotorcycleVehicleHardware* mHw;
 };
@@ -55,6 +65,9 @@ constexpr int32_t PROP_OIL = static_cast<int32_t>(VehicleProperty::ENGINE_OIL_TE
 constexpr int32_t PROP_ODOMETER = static_cast<int32_t>(VehicleProperty::PERF_ODOMETER);
 constexpr int32_t PROP_EV_BATTERY_LEVEL =
         static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL);
+constexpr int32_t PROP_RANGE = static_cast<int32_t>(VehicleProperty::RANGE_REMAINING);
+constexpr int32_t PROP_BATTERY_CAPACITY =
+        static_cast<int32_t>(VehicleProperty::INFO_EV_BATTERY_CAPACITY);
 
 struct can_frame makeFrame(uint32_t id, bool extended, std::initializer_list<uint8_t> bytes) {
     struct can_frame frame;
@@ -87,6 +100,11 @@ VehiclePropValue makeIntValue(int32_t propId, int32_t value) {
 class MotorcycleVehicleHardwareTest : public ::testing::Test {
   protected:
     void SetUp() override {
+        // The range model loads its learned consumption and pack config from
+        // persist properties in the constructor, and property_set persists
+        // in-process on the host - clear them BEFORE construction.
+        property_set("persist.vendor.motodash.whperkm", "");
+        property_set("persist.vendor.motodash.cfg.pack_energy_wh", "");
         // Nonexistent interface: the reader thread stays in its retry loop and
         // never interferes; frames are injected through the peer instead.
         mHardware = std::make_unique<MotorcycleVehicleHardware>("vcan-test-none");
@@ -506,6 +524,109 @@ TEST_F(MotorcycleVehicleHardwareTest, GearChangeNotifiesOnlyOnChange) {
     EXPECT_EQ(countEvents(PROP_CURRENT_GEAR), 2u);
     auto gear = lastEvent(PROP_CURRENT_GEAR);
     EXPECT_EQ(gear->value.int32Values[0], static_cast<int32_t>(VehicleGear::GEAR_NEUTRAL));
+}
+
+// ============================================================================
+// Range model. Driven with synthetic timestamps through the peer: 100ms steps
+// at 20 m/s advance 2m per step, and 72V * 27.78A = 2000W consumes
+// 0.0556 Wh per step, i.e. 27.78 Wh/km - a plausible motorway figure.
+// ============================================================================
+
+namespace {
+constexpr int64_t kStepNs = 100000000LL;  // 100ms
+constexpr float kTestSpeedMps = 20.0f;
+constexpr float kTestVoltage = 72.0f;
+constexpr float kTestCurrentA = 27.78f;   // 2000W at 72V -> 27.78 Wh/km at 20 m/s
+}  // namespace
+
+TEST_F(MotorcycleVehicleHardwareTest, RangeStaysUnknownUntilConsumptionLearned) {
+    mPeer->setLastSoc(80.0f);
+    mPeer->publishRange(1);
+    auto range = lastEvent(PROP_RANGE);
+    ASSERT_TRUE(range.has_value());
+    EXPECT_FLOAT_EQ(range->value.floatValues[0], 0.0f);  // 0 = unknown, UI shows "--"
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, RangeLearnsConsumptionAndProjects) {
+    mPeer->setLastSoc(50.0f);
+    // 500m at steady 2000W: two full 200m chunks complete and agree, so the
+    // EMA equals the true consumption regardless of seeding order.
+    int64_t t = 1;
+    mPeer->accumulateDistance(kTestSpeedMps, t);  // establish time reference
+    mPeer->accumulateEnergy(kTestVoltage, kTestCurrentA, kTestSpeedMps, t);
+    for (int i = 0; i < 250; i++) {
+        t += kStepNs;
+        mPeer->accumulateDistance(kTestSpeedMps, t);
+        mPeer->accumulateEnergy(kTestVoltage, kTestCurrentA, kTestSpeedMps, t);
+    }
+    auto range = lastEvent(PROP_RANGE);
+    ASSERT_TRUE(range.has_value());
+    // 50% of the 5292Wh default pack at 27.78 Wh/km = 95.2 km
+    EXPECT_NEAR(range->value.floatValues[0], 95250.0f, 2500.0f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, StandstillChargingDoesNotPoisonConsumption) {
+    mPeer->setLastSoc(50.0f);
+    int64_t t = 1;
+    mPeer->accumulateDistance(kTestSpeedMps, t);
+    mPeer->accumulateEnergy(kTestVoltage, kTestCurrentA, kTestSpeedMps, t);
+    for (int i = 0; i < 250; i++) {
+        t += kStepNs;
+        mPeer->accumulateDistance(kTestSpeedMps, t);
+        mPeer->accumulateEnergy(kTestVoltage, kTestCurrentA, kTestSpeedMps, t);
+    }
+    float learnedRange = lastEvent(PROP_RANGE)->value.floatValues[0];
+
+    // Park and charge at -10A for 10 minutes: no distance, heavy negative
+    // power. Must not leak into the consumption average.
+    for (int i = 0; i < 6000; i++) {
+        t += kStepNs;
+        mPeer->accumulateDistance(0.0f, t);
+        mPeer->accumulateEnergy(kTestVoltage, -10.0f, 0.0f, t);
+    }
+    // Ride one more chunk at the same consumption; the average must be intact.
+    for (int i = 0; i < 105; i++) {
+        t += kStepNs;
+        mPeer->accumulateDistance(kTestSpeedMps, t);
+        mPeer->accumulateEnergy(kTestVoltage, kTestCurrentA, kTestSpeedMps, t);
+    }
+    EXPECT_NEAR(lastEvent(PROP_RANGE)->value.floatValues[0], learnedRange,
+                learnedRange * 0.05f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, RegenChunkExtendsRange) {
+    mPeer->setLastSoc(50.0f);
+    int64_t t = 1;
+    mPeer->accumulateDistance(kTestSpeedMps, t);
+    mPeer->accumulateEnergy(kTestVoltage, kTestCurrentA, kTestSpeedMps, t);
+    for (int i = 0; i < 250; i++) {
+        t += kStepNs;
+        mPeer->accumulateDistance(kTestSpeedMps, t);
+        mPeer->accumulateEnergy(kTestVoltage, kTestCurrentA, kTestSpeedMps, t);
+    }
+    float drivingRange = lastEvent(PROP_RANGE)->value.floatValues[0];
+
+    // A long downhill: regen while rolling. The net-negative chunk clamps to
+    // zero consumption and pulls the EMA (and so the range) up, never down.
+    for (int i = 0; i < 105; i++) {
+        t += kStepNs;
+        mPeer->accumulateDistance(kTestSpeedMps, t);
+        mPeer->accumulateEnergy(kTestVoltage, -10.0f, kTestSpeedMps, t);
+    }
+    EXPECT_GT(lastEvent(PROP_RANGE)->value.floatValues[0], drivingRange);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, PackEnergyConfigAppliesAndValidates) {
+    EXPECT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_PACK_ENERGY_WH, 4900.0f)),
+              StatusCode::OK);
+    auto cap = lastEvent(PROP_BATTERY_CAPACITY);
+    ASSERT_TRUE(cap.has_value());
+    EXPECT_FLOAT_EQ(cap->value.floatValues[0], 4900.0f);
+
+    EXPECT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_PACK_ENERGY_WH, 100.0f)),
+              StatusCode::INVALID_ARG);
+    EXPECT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_PACK_ENERGY_WH, 99999.0f)),
+              StatusCode::INVALID_ARG);
 }
 
 }  // namespace
