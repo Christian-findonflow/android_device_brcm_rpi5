@@ -579,7 +579,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     }
 
     // Link status and charging state - ON_CHANGE
-    for (int32_t prop : {VENDOR_LINK_STATUS, VENDOR_CHARGING}) {
+    for (int32_t prop : {VENDOR_LINK_STATUS, VENDOR_CHARGING, VENDOR_RAW_GEAR_STATUS}) {
         VehiclePropConfig config;
         config.prop = prop;
         config.access = VehiclePropertyAccess::READ;
@@ -659,6 +659,10 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addConfigProp(VENDOR_CFG_GPIO_ACTIVE_LOW, false, 0.0f, mGpioActiveLow.load() ? 1 : 0);
     addConfigProp(VENDOR_CFG_PACK_ENERGY_WH, true, mPackEnergyWh.load(), 0);
     addConfigProp(VENDOR_CFG_CAN_CAPTURE, false, 0.0f, mCaptureEnabled.load() ? 1 : 0);
+    // Which raw nibble means P: the spec hints the bike may report 1=P..4=D
+    // instead of 0=P..3=D ("display needs +1"). Settable from Workshop
+    // settings on the fly so a first-ride discrepancy needs no rebuild.
+    addConfigProp(VENDOR_CFG_GEAR_BASE, false, 0.0f, mGearBase.load());
 
     // Standard display-unit properties. configArray lists the supported
     // VehicleUnit values, as the property docs require.
@@ -848,8 +852,9 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
     int16_t currentRaw = static_cast<int16_t>(data[6] | (data[7] << 8));
     float current = currentRaw * 0.1f;
     
-    // Map gear: 00=P(0), 01=R(1), 10=N(2), 11=D(3)
-    int gear = gearRaw;
+    // Map gear: 00=P(0), 01=R(1), 10=N(2), 11=D(3), shifted by the
+    // configurable base (spec ambiguity: some firmware reports 1=P..4=D).
+    int gear = gearRaw - mGearBase.load(std::memory_order_relaxed);
     
     // Frame dump, gated: at 20Hz this alone is ~2 lines/s in logcat
     static int statusMsgCount = 0;
@@ -893,7 +898,7 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
     {
         constexpr int64_t kBmsCurrentFreshNs = 5LL * 1000000000LL;
         bool bmsFresh = mLastBmsCurrentNs != 0 && (timestamp - mLastBmsCurrentNs) < kBmsCurrentFreshNs;
-        updateChargingState(rpm, bmsFresh ? mBmsCurrentA : current);
+        updateChargingState(rpm, bmsFresh ? mBmsCurrentA : current, timestamp);
     }
     float speedMps = calculateSpeedFromRpm(rpm);
     accumulateDistance(speedMps, timestamp);
@@ -933,6 +938,17 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
             brakeValue.value.int32Values[0] = brake;
             brakeValue.timestamp = timestamp;
             notifyPropertyChange(static_cast<int32_t>(VehicleProperty::PARKING_BRAKE_ON), brakeValue);
+        }
+    }
+
+    // Raw gear/status byte for the Workshop diagnosis row.
+    {
+        std::lock_guard<std::mutex> lock(mValuesMutex);
+        auto& rawValue = mCurrentValues[VENDOR_RAW_GEAR_STATUS];
+        if (rawValue.value.int32Values[0] != statusAndGear) {
+            rawValue.value.int32Values[0] = statusAndGear;
+            rawValue.timestamp = timestamp;
+            notifyPropertyChange(VENDOR_RAW_GEAR_STATUS, rawValue);
         }
     }
 
@@ -1528,10 +1544,24 @@ void MotorcycleVehicleHardware::linkWatchdogThread() {
     }
 }
 
-void MotorcycleVehicleHardware::updateChargingState(int rpm, float current) {
-    // Standstill with charge current flowing in. rpm==0 excludes regen, which
-    // only happens with the motor turning.
-    int32_t charging = (rpm == 0 && current <= CHARGING_CURRENT_THRESHOLD_A) ? 1 : 0;
+void MotorcycleVehicleHardware::updateChargingState(int rpm, float current, int64_t nowNs) {
+    // Standstill with charge current flowing in. rpm==0 excludes rolling
+    // regen - but the instant the wheel stops after regen braking, the pack
+    // current is still negative for a beat, which flashed the charging
+    // takeover during a simulated stop (Christian caught it watching the
+    // ride replay). Charging is therefore only declared once standstill AND
+    // charge current have held together for a dwell period; a regen tail
+    // dies in well under a second, a real charger holds indefinitely.
+    // Movement or the current drying up cancels instantly.
+    bool candidate = (rpm == 0 && current <= CHARGING_CURRENT_THRESHOLD_A);
+    if (!candidate) {
+        mChargingCandidateSinceNs = 0;
+    } else if (mChargingCandidateSinceNs == 0) {
+        mChargingCandidateSinceNs = nowNs;
+    }
+    int32_t charging = (candidate &&
+            (nowNs - mChargingCandidateSinceNs) >=
+                    mChargingDwellNs.load(std::memory_order_relaxed)) ? 1 : 0;
     if (charging == mCharging) {
         return;
     }
@@ -1877,6 +1907,14 @@ StatusCode MotorcycleVehicleHardware::applyConfigValue(const VehiclePropValue& v
             LOG(INFO) << "Trip meter reset requested";
             return StatusCode::OK;
         }
+        case VENDOR_CFG_GEAR_BASE: {
+            int32_t v;
+            if (!intArg(0, 1, &v)) return StatusCode::INVALID_ARG;
+            mGearBase = v;
+            persistConfig("persist.vendor.motodash.cfg.gear_base", std::to_string(v));
+            LOG(INFO) << "Gear base set to " << v << " (raw " << v << " = P)";
+            break;
+        }
         case VENDOR_CFG_CAN_CAPTURE: {
             int32_t v;
             if (!intArg(0, 1, &v)) return StatusCode::INVALID_ARG;
@@ -2072,6 +2110,14 @@ void MotorcycleVehicleHardware::loadConfig() {
             mWheelCircumference = v;
         } else {
             LOG(WARNING) << "Ignoring out-of-range wheel_circumference: " << propValue;
+        }
+    }
+    if (property_get("persist.vendor.motodash.cfg.gear_base", propValue, "") > 0) {
+        int v = atoi(propValue);
+        if (v == 0 || v == 1) {
+            mGearBase = v;
+        } else {
+            LOG(WARNING) << "Ignoring out-of-range gear_base: " << propValue;
         }
     }
     if (property_get("persist.vendor.motodash.cfg.gear_ratio", propValue, "") > 0) {

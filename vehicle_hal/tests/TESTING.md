@@ -164,3 +164,32 @@ PARKED - watch with `dumpsys car_service | grep 'Current Driving State'`.
 UX restrictions stay explicitly permissive while moving (motorcycle
 car_ux_restrictions_map.xml in car-services): nothing locks at speed by
 design - see FOLLOW-UPS "Riding lockout policy" for the reasoning.
+
+## End-to-end CAN behavior test (one command)
+
+`tests/e2e_can_test.sh [serial]` replays the synthetic ride into a running
+emulator (or bench Pi over adb) and asserts the WHOLE stack's behavior:
+speed and gear decode, the gear-linked parking brake, driving-state
+IDLING -> MOVING -> PARKED, SoC, controller+BMS link bits, range learning,
+odometer/trip accumulation, the blanking cascade when the bus goes silent,
+and that no tombstones appeared. ~3 minutes, prints PASS/FAIL per check,
+exit code 0 only if everything held. Run it before flashing an image to
+the bike.
+
+## Launcher logic tests
+
+`atest CarLauncherTests:com.android.car.carlauncher.MotorcycleLogicTest`
+(device test - the emulator counts) covers the rider-facing pure logic that
+no other suite touched: unit formatting (degC/degF, km/mi), the Workshop PIN
+(salted-hash lifecycle + format rules), the shared SoC/temperature/RPM color
+thresholds, and the NOAA solar-elevation used for night dimming (checked
+against London solstice noon/midnight and equator noon).
+
+## First-ride gear diagnosis
+
+Workshop settings now shows the controller's raw gear/status byte LIVE and
+has a "Gear base +1" switch (VENDOR_CFG_GEAR_BASE, persisted, applies
+instantly). On the bike: shift through P/R/N/D, hold Sport, flip drive
+modes 1/2/3, and read exactly which nibble/bits change - then set the base
+to match. No laptop, no rebuild. Sport/drive-mode MAPPING (what the cluster
+should display for them) still needs the ride capture to design properly.

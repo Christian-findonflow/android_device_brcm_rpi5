@@ -37,6 +37,14 @@ entries below and the git log of the three forks.
 
 ## Blocked on Christian (things only you can do)
 
+- **Sport + drive modes 1/2/3 (first ride)**: the gear nibble now has a
+  Workshop-settable base (+1 covers the spec's P-offset ambiguity) and the
+  Workshop screen shows the raw gear/status byte live - shift through
+  P/R/N/D, hold Sport (momentary, <=30 s), flip modes 1/2/3 and note which
+  nibble values / status bits appear. With that (plus the ride capture) we
+  design real S-gear and drive-mode display. Until then unknown nibbles
+  render as N.
+
 - **Riding lockout policy - DECIDED & IMPLEMENTED 2026-08-30 (Christian:
   gear-linked)**: the VHAL now derives PARKING_BRAKE_ON from the gear (P = on,
   R/N/D = off, boot default on), which lets CarDrivingStateService initialize,

@@ -17,6 +17,8 @@
 
 #include <linux/can.h>
 
+#include <sys/socket.h>
+
 #include <dirent.h>
 #include <fstream>
 #include <mutex>
@@ -52,6 +54,13 @@ class MotorcycleVehicleHardwareTestPeer {
     void publishRange(int64_t ts) { mHw->publishRange(ts); }
     void setLastSoc(float soc) { mHw->mLastSocPercent = soc; }
     void setCaptureDir(const std::string& dir) { mHw->mCaptureDir = dir; }
+    void updateChargingState(int rpm, float current, int64_t ts) {
+        mHw->updateChargingState(rpm, current, ts);
+    }
+    void setChargingDwell(int64_t ns) { mHw->mChargingDwellNs = ns; }
+    // Wire a socketpair in place of the CAN socket so tests can read frames
+    // the HAL transmits (display reports).
+    void setCanSocket(int fd) { mHw->mCanSocket = fd; }
 
   private:
     MotorcycleVehicleHardware* mHw;
@@ -115,6 +124,7 @@ class MotorcycleVehicleHardwareTest : public ::testing::Test {
         property_set("persist.vendor.motodash.cfg.units_distance", "");
         property_set("persist.vendor.motodash.cfg.units_temp", "");
         property_set("persist.vendor.motodash.cfg.can_capture", "");
+        property_set("persist.vendor.motodash.cfg.gear_base", "");
         // Nonexistent interface: the reader thread stays in its retry loop and
         // never interferes; frames are injected through the peer instead.
         mHardware = std::make_unique<MotorcycleVehicleHardware>("vcan-test-none");
@@ -234,6 +244,147 @@ TEST_F(MotorcycleVehicleHardwareTest, ParkingBrakeFollowsGear) {
     brake = lastEvent(PROP_PARKING_BRAKE);
     ASSERT_TRUE(brake.has_value());
     EXPECT_EQ(brake->value.int32Values[0], 0);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, DisplayReportEncodesOdoTripSpeedAndCounter) {
+    // The stock display answers the controller at 250 ms on 0x1026105A;
+    // we must look the same or the controller flags a missing display.
+    // Wire a socketpair in as the CAN socket and read back what the HAL
+    // transmits when a controller frame arrives.
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
+    mPeer->setCanSocket(sv[1]);
+
+    // rpm 20000 -> 105 km/h unclamped? No: 20000*1.894/(4*60)=157.8 m/s
+    // is 568 km/h, so the report's speed byte must clamp to 199.
+    auto fast = makeFrame(CAN_ID_CONTROLLER_STATUS, /*extended=*/true,
+                          {0x00, 0x30, 0x20, 0x4E, 0xD0, 0x02, 0x00, 0x00});
+    mPeer->processCanFrame(fast);
+
+    // The BMS poll thread also writes OBD2 requests into this socket, so
+    // reads must filter for the display-report ID.
+    auto readDisplayReport = [&](struct can_frame* out) {
+        struct can_frame f;
+        while (recv(sv[0], &f, sizeof(f), MSG_DONTWAIT) == (ssize_t)sizeof(f)) {
+            if (f.can_id == (CAN_ID_DISPLAY_REPORT | CAN_EFF_FLAG)) {
+                *out = f;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    struct can_frame report;
+    ASSERT_TRUE(readDisplayReport(&report));
+    EXPECT_EQ(report.can_dlc, 8);
+    // Fresh test instance: odometer and trip are zero.
+    EXPECT_EQ(report.data[0], 0);  // odo low
+    EXPECT_EQ(report.data[2], 0);  // odo high
+    EXPECT_EQ(report.data[3], 0);  // trip low
+    EXPECT_EQ(report.data[4], 0);  // trip high
+    EXPECT_EQ(report.data[5], 199);  // speed clamped to the display's max
+    uint8_t firstCounter = report.data[6];
+
+    // A frame inside the 250 ms window must NOT produce a report.
+    mPeer->processCanFrame(fast);
+    struct can_frame none;
+    EXPECT_FALSE(readDisplayReport(&none));
+
+    // After the window, the next frame reports again with the counter bumped.
+    usleep(260000);
+    auto slow = makeFrame(CAN_ID_CONTROLLER_STATUS, /*extended=*/true,
+                          {0x00, 0x30, 0x54, 0x01, 0xD0, 0x02, 0x00, 0x00});
+    mPeer->processCanFrame(slow);  // rpm 340 -> 2.68 m/s -> 9 km/h
+    ASSERT_TRUE(readDisplayReport(&report));
+    EXPECT_EQ(report.data[5], 9);
+    EXPECT_EQ(report.data[6], (uint8_t)(firstCounter + 1));
+
+    mPeer->setCanSocket(-1);
+    close(sv[0]);
+    close(sv[1]);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, CaptureToggleClosesAndReopensFiles) {
+    // The Rider settings switch flips VENDOR_CFG_CAN_CAPTURE live. Off must
+    // close the log (so a pull mid-session gets complete data); on again
+    // must start a NEW file rather than corrupt the old one.
+    char dirTemplate[] = "/tmp/motocapXXXXXX";
+    ASSERT_NE(mkdtemp(dirTemplate), nullptr);
+    mPeer->setCaptureDir(dirTemplate);
+
+    auto countLogs = [&]() {
+        int n = 0;
+        DIR* d = opendir(dirTemplate);
+        if (!d) return -1;
+        while (auto* e = readdir(d)) {
+            if (strncmp(e->d_name, "can-", 4) == 0) n++;
+        }
+        closedir(d);
+        return n;
+    };
+
+    ASSERT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_CAPTURE, 1)),
+              StatusCode::OK);
+    auto frame = makeFrame(CAN_ID_CONTROLLER_STATUS, /*extended=*/true,
+                           {0x00, 0x30, 0xB8, 0x0B, 0xD0, 0x02, 0xFF, 0x00});
+    mPeer->processCanFrame(frame);
+    EXPECT_EQ(countLogs(), 1);
+
+    ASSERT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_CAPTURE, 0)),
+              StatusCode::OK);
+    mPeer->processCanFrame(frame);  // capture off: frame must not reopen a file
+    EXPECT_EQ(countLogs(), 1);
+
+    sleep(1);  // candump filenames carry epoch seconds; force a distinct name
+    ASSERT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_CAPTURE, 1)),
+              StatusCode::OK);
+    mPeer->processCanFrame(frame);
+    EXPECT_EQ(countLogs(), 2);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, GearBaseOffsetRemapsGears) {
+    // Spec ambiguity: the bike may report 1=P..4=D instead of 0=P..3=D.
+    // The Workshop-settable gear base must remap live, and the parking
+    // brake must follow the REMAPPED gear.
+    ASSERT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_GEAR_BASE, 1)),
+              StatusCode::OK);
+
+    // Raw nibble 4 with base 1 -> D.
+    auto d = makeFrame(CAN_ID_CONTROLLER_STATUS, /*extended=*/true,
+                       {0x00, 0x40, 0x00, 0x00, 0xD0, 0x02, 0x00, 0x00});
+    mPeer->processCanFrame(d);
+    auto gear = lastEvent(PROP_CURRENT_GEAR);
+    ASSERT_TRUE(gear.has_value());
+    EXPECT_EQ(gear->value.int32Values[0], static_cast<int32_t>(VehicleGear::GEAR_DRIVE));
+    auto brake = lastEvent(PROP_PARKING_BRAKE);
+    ASSERT_TRUE(brake.has_value());
+    EXPECT_EQ(brake->value.int32Values[0], 0);
+
+    // Raw nibble 1 with base 1 -> P, and the brake comes on.
+    auto p = makeFrame(CAN_ID_CONTROLLER_STATUS, /*extended=*/true,
+                       {0x00, 0x10, 0x00, 0x00, 0xD0, 0x02, 0x00, 0x00});
+    mPeer->processCanFrame(p);
+    gear = lastEvent(PROP_CURRENT_GEAR);
+    ASSERT_TRUE(gear.has_value());
+    EXPECT_EQ(gear->value.int32Values[0], static_cast<int32_t>(VehicleGear::GEAR_PARK));
+    brake = lastEvent(PROP_PARKING_BRAKE);
+    ASSERT_TRUE(brake.has_value());
+    EXPECT_EQ(brake->value.int32Values[0], 1);
+
+    // Out-of-range base is refused.
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_GEAR_BASE, 2)),
+              StatusCode::INVALID_ARG);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, RawGearStatusBytePublished) {
+    // The Workshop screen shows byte1 verbatim so gear/mode discrepancies
+    // can be identified on the bike without a laptop.
+    auto frame = makeFrame(CAN_ID_CONTROLLER_STATUS, /*extended=*/true,
+                           {0x00, 0x35, 0x00, 0x00, 0xD0, 0x02, 0x00, 0x00});
+    mPeer->processCanFrame(frame);
+    auto raw = lastEvent(VENDOR_RAW_GEAR_STATUS);
+    ASSERT_TRUE(raw.has_value());
+    EXPECT_EQ(raw->value.int32Values[0], 0x35);
 }
 
 TEST_F(MotorcycleVehicleHardwareTest, RegenCurrentIsSigned) {
@@ -534,22 +685,28 @@ TEST_F(MotorcycleVehicleHardwareTest, BmsLinkIndependentOfController) {
 // Charging: standstill + charge current. Regen (moving, negative current)
 // must NOT register as charging.
 TEST_F(MotorcycleVehicleHardwareTest, ChargingDetectedAtStandstillOnly) {
-    // rpm 0, current -8.0A (0xFFB0 -> raw -80)
-    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
-                                     {0x00, 0x00, 0x00, 0x00, 0xD0, 0x02, 0xB0, 0xFF}));
+    // Charging needs standstill + charge current SUSTAINED for the dwell:
+    // one frame must not flip it.
+    int64_t t0 = 1000000000LL;
+    mPeer->updateChargingState(0, -8.0f, t0);
     auto charging = lastEvent(VENDOR_CHARGING);
+    if (charging.has_value()) EXPECT_EQ(charging->value.int32Values[0], 0);
+
+    // Held for 6 s: now it is a charger, not a regen tail.
+    mPeer->updateChargingState(0, -8.0f, t0 + 6000000000LL);
+    charging = lastEvent(VENDOR_CHARGING);
     ASSERT_TRUE(charging.has_value());
     EXPECT_EQ(charging->value.int32Values[0], 1);
 
-    // Moving with regen current: not charging
-    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
-                                     {0x00, 0x20, 0xB8, 0x0B, 0xD0, 0x02, 0xB0, 0xFF}));
+    // Moving with regen current: charging drops instantly.
+    mPeer->updateChargingState(3000, -25.0f, t0 + 7000000000LL);
     charging = lastEvent(VENDOR_CHARGING);
     EXPECT_EQ(charging->value.int32Values[0], 0);
 
-    // Standstill drawing current (accessories/idle): not charging
-    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
-                                     {0x00, 0x00, 0x00, 0x00, 0xD0, 0x02, 0x14, 0x00}));
+    // Standstill drawing current (accessories/idle): never a candidate,
+    // no matter how long it holds.
+    mPeer->updateChargingState(0, 2.0f, t0 + 8000000000LL);
+    mPeer->updateChargingState(0, 2.0f, t0 + 30000000000LL);
     charging = lastEvent(VENDOR_CHARGING);
     EXPECT_EQ(charging->value.int32Values[0], 0);
 }
@@ -718,6 +875,9 @@ TEST_F(MotorcycleVehicleHardwareTest, PackAmphoursAreBigEndian) {
 }
 
 TEST_F(MotorcycleVehicleHardwareTest, BmsSignedCurrentDrivesChargingDetection) {
+    // This test is about SOURCE SELECTION (fresh BMS sign outranks the
+    // controller), not the dwell - collapse the dwell to zero.
+    mPeer->setChargingDwell(0);
     // BMS reports -6.0A (charging): raw -60 = 0xFFC4 big-endian
     mPeer->processCanFrame(makeFrame(CAN_ID_OBD2_RESPONSE, false,
                                      {0x05, 0x62, 0xF0, 0x0C, 0xFF, 0xC4, 0, 0}));
@@ -730,6 +890,24 @@ TEST_F(MotorcycleVehicleHardwareTest, BmsSignedCurrentDrivesChargingDetection) {
     auto charging = lastEvent(VENDOR_CHARGING);
     ASSERT_TRUE(charging.has_value());
     EXPECT_EQ(charging->value.int32Values[0], 1);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, RegenStopDoesNotFlashCharging) {
+    // Braking to a stop with regen: the wheel stops a beat before the charge
+    // current dies. Christian watched this flash the garage takeover on the
+    // simulator - the exact sequence must never declare charging.
+    int64_t t0 = 1000000000LL;
+    mPeer->updateChargingState(500, -25.0f, t0);              // rolling regen
+    mPeer->updateChargingState(0, -10.0f, t0 + 200000000LL);  // wheel just stopped
+    mPeer->updateChargingState(0, -4.0f, t0 + 700000000LL);   // tail dying
+    mPeer->updateChargingState(0, 0.0f, t0 + 1200000000LL);   // gone
+    auto charging = lastEvent(VENDOR_CHARGING);
+    if (charging.has_value()) EXPECT_EQ(charging->value.int32Values[0], 0);
+
+    // Sitting at the light afterwards (small accessory draw): still nothing.
+    mPeer->updateChargingState(0, 1.5f, t0 + 30000000000LL);
+    charging = lastEvent(VENDOR_CHARGING);
+    if (charging.has_value()) EXPECT_EQ(charging->value.int32Values[0], 0);
 }
 
 // ============================================================================

@@ -111,7 +111,9 @@ constexpr int32_t STATUS_SIDE_STAND = 1 << 3;
 // Data-link status. If the controller stops broadcasting, the dashboard
 // must show "no data" rather than freeze at the last values - a speedo
 // stuck at the last reading is worse than a dead one.
-constexpr int32_t VENDOR_LINK_STATUS = 0x21400043;         // Bitfield (int32)
+constexpr int32_t VENDOR_LINK_STATUS = 0x21400043;
+constexpr int32_t VENDOR_CFG_GEAR_BASE = 0x21400047;       // raw nibble that means P (0 or 1, applies live)
+constexpr int32_t VENDOR_RAW_GEAR_STATUS = 0x21400048;     // raw byte1 of the status frame, for Workshop diagnosis         // Bitfield (int32)
 constexpr int32_t LINK_CONTROLLER = 1 << 0;   // 0x10261022/23 frames flowing
 constexpr int32_t LINK_BMS = 1 << 1;          // 0x6B1 or OBD2 responses flowing
 
@@ -264,7 +266,7 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void accumulateEnergy(float voltage, float current, float speedMps, int64_t timestamp);
     void publishRange(int64_t timestamp);
     void updateStatusFlags(int32_t bits);
-    void updateChargingState(int rpm, float current);
+    void updateChargingState(int rpm, float current, int64_t nowNs);
     // Called by the watchdog (and tests, with an explicit now) to drop link
     // bits when frames stop arriving.
     void checkLinkTimeouts(int64_t nowNs);
@@ -403,6 +405,11 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     std::atomic<uint32_t> mCanIdBms{CAN_ID_BMS};
     std::atomic<float> mWheelCircumference{DEFAULT_WHEEL_CIRCUMFERENCE_M};
     std::atomic<float> mGearRatio{DEFAULT_GEAR_RATIO};
+    std::atomic<int32_t> mGearBase{0};
+    // Charging dwell: standstill + charge current must hold this long before
+    // the charging state is declared (kills the regen-stop flash).
+    int64_t mChargingCandidateSinceNs = 0;
+    std::atomic<int64_t> mChargingDwellNs{5LL * 1000000000LL};
 };
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle

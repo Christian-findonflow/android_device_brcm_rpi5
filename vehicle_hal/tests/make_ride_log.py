@@ -47,11 +47,21 @@ t = 0.0
 while t <= dur:
     rpm = rpm_for(speed_at(t))
     cur = int(round(current_at(t) * 10)) & 0xFFFF
-    d = [0x00, 0x30, rpm & 0xFF, (rpm >> 8) & 0xFF,
+    # A controller fault (bit 3 = CONTROLLER) burns for 30 s mid-cruise so the
+    # end-to-end test can watch VENDOR_FAULT_FLAGS raise and clear (65-115 s).
+    err = 0x08 if 65 <= t < 115 else 0x00
+    d = [err, 0x30, rpm & 0xFF, (rpm >> 8) & 0xFF,
          VOLT_RAW & 0xFF, (VOLT_RAW >> 8) & 0xFF, cur & 0xFF, (cur >> 8) & 0xFF]
     print("(%.6f) vcan0 10261022#%s" % (base + t, "".join("%02X" % b for b in d)))
     if abs(t - round(t)) < 1e-9:
         soc = SOC_START if t < dur / 2 else SOC_START - 1
         b = [0x00, 0x63, 0x00, soc, 0x03, 0x02, 0x00, 0x41]   # temp raw 65 = 25 C
         print("(%.6f) vcan0 6B1#%s" % (base + t + 0.005, "".join("%02X" % x for x in b)))
+        # Temps frame at 1 Hz: controller/motor warm through the ride,
+        # throttle open whenever the motor is pulling current.
+        ctl = int(25 + 20.0 * t / dur)
+        mot = int(25 + 35.0 * t / dur)
+        thr = 40 if current_at(t) > 0 else 0
+        d2 = [ctl, mot, 0, 0, thr, 0, 0, 0]
+        print("(%.6f) vcan0 10261023#%s" % (base + t + 0.010, "".join("%02X" % x for x in d2)))
     t = round(t + 0.1, 1)
