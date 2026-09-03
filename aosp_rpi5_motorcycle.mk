@@ -18,6 +18,12 @@
 # removes nothing, because inherit-product flattens variables only after the
 # makefile has been read.
 #
+# RESOLVED 2026-09-03 for the test/demo apps, CarRadioApp and Music: they are
+# excluded through soong's `overrides` list on the CarLauncher module
+# (packages/apps/Car/Launcher/app/Android.bp) - the mechanism AOSP actually
+# supports. The phone apps (Calendar, Camera2, DeskClock, Gallery2,
+# PrintSpooler) can go the same way once Christian decides.
+#
 # The real fix is to inherit a leaner base than full_base.mk (which pulls in the
 # phone apps) and to gate car.mk's test-app block. That is a deliberate change
 # affecting what ships, so it is left as a follow-up rather than done blind.
