@@ -175,6 +175,16 @@ sealed 2026-09-04 13:18):
     current revision has two STEMMA QT ports** (Mouser shows the old header-only
     photo); NOT Adafruit 4633 (LPS22HB - no driver in our kernel, st_pressure
     unset). `dtoverlay=i2c-sensor,bmp280,addr=0x77` (0x76 with SDO jumper).
+    ALTERNATIVE IMU (assessed 2026-09-04): **Adafruit 4754 BNO085** (£22.50,
+    Pimoroni) - on-chip sensor fusion (rotation vector, gravity vector,
+    calibrated gyro, tilt-compensated heading) so lean/pitch come out ready-made
+    instead of us writing and tuning a filter. Cost: NO kernel driver for
+    BNO08x - the VHAL would speak SH-2/SHTP itself over /dev/i2c-1
+    (CONFIG_I2C_CHARDEV=y, vendor CEVA's Apache-2.0 sh2 C library, poll at
+    ~100 Hz, no INT line over Qwiic). Risk: BNO08x I2C clock-stretching broke on
+    Pi 4's BCM2835; Pi 5's RP1 DesignWare controller should be fine, and the
+    escape hatch is UART-RVC mode through a CP210x/CH341 USB-serial dongle
+    (both drivers = y): 100 Hz yaw/pitch/roll as a trivial serial stream.
     Cabling: STEMMA QT/Qwiic boards carry two PARALLEL connectors, so daisy-chain:
     HAT Grove port -> Qwiic-to-Grove cable -> IMU -> Qwiic-Qwiic cable (Adafruit
     4399 50 mm / 4210 100 mm) -> BMP280. One I2C bus (i2c-1), devices told apart
