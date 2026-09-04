@@ -136,6 +136,25 @@ sealed 2026-09-04 13:18):
   guard (dormant - app not shipped). Revert or guard before ever re-enabling;
   or retire the repo.
 
+### Hardware shortlist (2026-09-04, from the rider-experience review)
+- **Pi 5 RTC battery** (official ML2020 cell): rtc-rpi + HCTOSYS are in the
+  kernel, so with a battery the clock survives key-off - ride summaries,
+  capture timestamps and the weather cache age all depend on it. Cheap, buy.
+- **Active Cooler** if not fitted: a sealed dash enclosure in summer will
+  throttle a Pi 5.
+- **BLE TPMS valve caps** (generic, broadcast manufacturer data): Pi 5 BT
+  scans them in a launcher service - no extra hardware beyond the caps.
+- **BLE handlebar remote** (HID media/D-pad button pod): arrives as key
+  events the launcher can map - glove-safe control without reaching for the
+  screen (the parked bar-controls decision).
+- **Ambient light sensor**: NOT plug-in today (only TSL2772 has a kernel
+  driver; BH1750/APDS9960/TSL2591 would need user-space I2C). Keep the
+  solar-elevation dimming.
+- **Power hold-up / clean shutdown**: the real reliability item - key-off
+  cuts 5 V mid-write (that is how the ESP got its "not properly unmounted").
+  Design: CAN silence = shutdown timer + a supercap/UPS on the 5 V rail.
+  Needs a proper look, not an impulse buy.
+
 ### Features
 - **Rider nice-to-haves (decided 2026-09-04) - IMPLEMENTED same day**: weather/rain
   card (Open-Meteo, keyed off the last GPS fix) + Breezy Weather app, "find
@@ -157,6 +176,12 @@ sealed 2026-09-04 13:18):
     card with per-wheel pressure/temperature and low-pressure warnings.
   - **Dashcam**: needs a Pi camera module; loop recording + event save on
     hard braking (we already see regen/brake current).
+    Checked 2026-09-04: the base image already ships a libcamera camera HAL
+    (com.android.hardware.camera.libcamera, pisp IPA) and the kernel has the
+    imx708/imx219/imx477 drivers, so a Camera Module 3 (Wide) is supported;
+    our product just sets ENABLE_CAMERA_SERVICE := false - one-line flip when
+    a camera is fitted. Needs the Pi 5 22-pin camera cable and a forward
+    housing.
   - **Lean angle / ride telemetry** - hardware decided 2026-09-04: NOT a HAT
     (the header already carries the CAN HAT, plus an NVMe HAT). The Seeed
     CAN-FD HAT v2 has two Grove I2C ports. The Grove IMU 10DOF/9DOF (MPU-9250)
