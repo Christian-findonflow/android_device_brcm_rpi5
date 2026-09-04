@@ -159,12 +159,20 @@ sealed 2026-09-04 13:18):
     hard braking (we already see regen/brake current).
   - **Lean angle / ride telemetry** - hardware decided 2026-09-04: NOT a HAT
     (the header already carries the CAN HAT, plus an NVMe HAT). The Seeed
-    CAN-FD HAT v2 has two Grove I2C ports, so a **Seeed Grove IMU 10DOF v2.0
-    (MPU-9250 + BMP280)** plugs straight in on a Grove cable; both chips have
-    drivers compiled into our prebuilt 6.12 Pi kernel (inv_mpu6050=y,
-    bmp280=y). Boot config: uncomment `dtparam=i2c_arm=on`, add
+    CAN-FD HAT v2 has two Grove I2C ports. The Grove IMU 10DOF/9DOF (MPU-9250)
+    boards are DISCONTINUED (checked 2026-09-04); in-stock options with drivers
+    compiled into our 6.12 Pi kernel: **Seeed Grove 6-Axis LSM6DS3** ($12.90,
+    plugs straight in) or, via a $1.95 Qwiic-to-Grove adapter cable (SparkFun
+    PRT-15109), **Adafruit ISM330DHCX** (industrial-grade 6-axis, same lsm6dsx
+    driver) plus an Adafruit BMP280 for altitude. All 6-axis = lean, pitch,
+    g-forces; a magnetometer is not needed for lean. Boot config: uncomment `dtparam=i2c_arm=on`, add
     `dtoverlay=i2c-sensor,mpu9250,bmp280`. The DFRobot Fermion 10-DOF
     (ADXL345/ITG-3205/HMC5883L) would NOT work without a kernel rebuild.
+    GPS stays USB (decided 2026-09-04): our GNSS HAL (device/brcm/rpi5/gnss_hal)
+    reads NMEA GGA/RMC/GSA/GSV/VTG from /dev/ttyACM0 at up to 115200 baud, so any
+    USB u-blox puck works unchanged; a Grove/I2C GPS would need a new HAL path
+    and puts the antenna inside the enclosure. Upgrade path if wanted: a USB
+    u-blox M8N/M9N puck at 10 Hz with an active antenna.
     Plan: VHAL sensor thread (~100 Hz from IIO), complementary filter for
     roll/pitch (pure, gtested), Workshop "Level" to zero mounting offsets,
     vendor props roll/pitch/g, cluster lean arc, max lean L/R in the ride
