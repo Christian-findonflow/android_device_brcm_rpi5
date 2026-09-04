@@ -140,6 +140,23 @@ encoding above D, and the OBD2 byte order (pack Ah near 68 confirms
 big-endian). The OBD2 requests (0x7E0) and responses (0x7E8) are in the log
 too, as are our own 0x1026105A display reports.
 
+**Raw IMU capture (2026-09-04).** The same Workshop switch also writes
+`/data/vendor/motodash/imu-<epoch>.log` while the lean sensor is present:
+every 100 Hz sample in sensor axes, the CAN speed the estimator was given,
+the live roll/pitch/status it produced, and the barometer at 2 Hz (format in
+`imu/ImuLog.h`). Pull it with the CAN log and replay on the host:
+
+    motorcycle_imu_replay imu-1757000000.log --up 0.2,-0.3,0.93 --fwd 0.9,0.4,0 \
+        --roll-tau 1.5 --band 0.15 --csv ride.csv
+
+`--up/--fwd` are the persisted `persist.vendor.motodash.imu.{up,fwd}` values
+(`adb shell getprop`); `--level` instead takes the first second of the log as
+the Level capture. The tool prints the sample rate, how long the estimate was
+valid, max lean replayed vs what the bike showed live, the rms difference
+between the two, the learned gyro bias and the pressure range; the CSV has
+raw axes plus live and replayed roll per sample for plotting. Change a
+constant on the command line, rerun, compare - that is how the filter gets
+tuned on a real ride instead of on synthetic corners.
 ## Simulated ride (no bike needed)
 
 `e2e_can_test.sh` now also asserts the **ride summary** (VENDOR_RIDE_SEQ /

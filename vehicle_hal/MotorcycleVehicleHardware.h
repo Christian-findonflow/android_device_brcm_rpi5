@@ -24,6 +24,7 @@
 #include <linux/can/raw.h>
 #include <linux/gpio.h>
 
+#include "imu/ImuLog.h"
 #include "imu/ImuSource.h"
 #include "imu/LeanEstimator.h"
 
@@ -321,6 +322,8 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     std::unique_ptr<imu::ImuSource> openImuSource();
     void processImuSample(const imu::ImuSample& s, float tempC, int64_t nowNs);
     void publishImuStatus(int64_t nowNs);
+    void captureImuSample(const imu::ImuSample& s, float speedMps, bool speedValid,
+                          const imu::LeanEstimator::State& st, int64_t nowNs);
     void loadImuCalibration();
     void persistImuCalibration();
     void trackRideLean(float rollDeg, float speedMps);
@@ -495,6 +498,10 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int mImuAddr = 0x6A;
     int mBaroAddr = 0x77;
     std::string mImuSimPath = "/data/vendor/motodash/imu_sim";
+    // Raw IMU capture, tied to the CAN capture switch (VENDOR_CFG_CAN_CAPTURE);
+    // imu thread only.
+    imu::ImuLogWriter mImuLog;
+    bool mImuLogFailureLogged = false;
 };
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle

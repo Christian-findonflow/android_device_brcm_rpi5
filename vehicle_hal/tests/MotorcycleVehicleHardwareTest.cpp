@@ -21,6 +21,8 @@
 #include <sys/socket.h>
 
 #include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <fstream>
 #include <mutex>
 #include <optional>
@@ -1195,6 +1197,75 @@ TEST_F(MotorcycleVehicleHardwareTest, ImuLevelRejectedWhileMoving) {
     ASSERT_TRUE(status.has_value());
     EXPECT_NE(status->value.int32Values[0] & IMU_STATUS_LEVEL_FAILED, 0);
     EXPECT_EQ(status->value.int32Values[0] & IMU_STATUS_LEVEL_SET, 0);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, ImuCaptureFollowsTheCanCaptureSwitch) {
+    using namespace imu;
+    char dirTemplate[] = "/tmp/motodash-imucap-XXXXXX";
+    ASSERT_NE(mkdtemp(dirTemplate), nullptr);
+    std::string dir = dirTemplate;
+    mPeer->setCaptureDir(dir);
+    mPeer->setImuPresent();
+    mPeer->setImuMounting(Mounting::identity());
+    SyntheticImu sim;
+    Scenario sc;
+    sc.speedMps = 12.0f;
+    int64_t t = 1000000000LL;
+    auto feed = [&](int n) {
+        for (int i = 0; i < n; i++) {
+            t += 10000000LL;
+            mPeer->setLiveSpeed(sc.speedMps, t);
+            mPeer->processImuSample(sim.sample(sc), 30.0f, t);
+        }
+    };
+    auto imuLogs = [&]() {
+        std::vector<std::string> names;
+        if (DIR* d = opendir(dir.c_str())) {
+            while (struct dirent* e = readdir(d)) {
+                if (strncmp(e->d_name, "imu-", 4) == 0) names.push_back(e->d_name);
+            }
+            closedir(d);
+        }
+        return names;
+    };
+
+    feed(50);
+    EXPECT_TRUE(imuLogs().empty());  // switch off: nothing written
+
+    ASSERT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_CAPTURE, 1)), StatusCode::OK);
+    feed(250);
+    auto logs = imuLogs();
+    ASSERT_EQ(logs.size(), 1u);
+    ImuLogReader reader;
+    ASSERT_TRUE(reader.open(dir + "/" + logs[0]));
+    ImuLogRecord r;
+    ImuLogBaro b;
+    bool isBaro;
+    int n = 0;
+    double lastT = -1;
+    while (reader.next(&r, &b, &isBaro)) {
+        ASSERT_FALSE(isBaro);
+        EXPECT_NEAR(r.sample.accelG.z, 1.0f, 1e-4f);
+        EXPECT_FLOAT_EQ(r.speedMps, 12.0f);
+        EXPECT_TRUE(r.speedValid);
+        if (lastT >= 0) EXPECT_NEAR(r.tS - lastT, 0.010, 1e-4);
+        lastT = r.tS;
+        n++;
+    }
+    EXPECT_EQ(n, 250);
+
+    ASSERT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_CAN_CAPTURE, 0)), StatusCode::OK);
+    feed(50);
+    struct stat st1;
+    ASSERT_EQ(stat((dir + "/" + logs[0]).c_str(), &st1), 0);
+    feed(50);
+    struct stat st2;
+    ASSERT_EQ(stat((dir + "/" + logs[0]).c_str(), &st2), 0);
+    EXPECT_EQ(st1.st_size, st2.st_size);  // closed: no more growth
+    EXPECT_EQ(imuLogs().size(), 1u);
+
+    for (const auto& name : imuLogs()) unlink((dir + "/" + name).c_str());
+    rmdir(dir.c_str());
 }
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle

@@ -20,11 +20,7 @@ cc_library_static {
     export_include_dirs: ["."],
     srcs: [
         "MotorcycleVehicleHardware.cpp",
-        "imu/I2cBus.cpp",
-        "imu/ImuSource.cpp",
-        "imu/LeanEstimator.cpp",
-        "imu/Sensors.cpp",
-        "imu/SyntheticImu.cpp",
+        ":motodash_imu_srcs",
     ],
     header_libs: [
         "IVehicleHardware",
@@ -60,6 +56,37 @@ cc_binary {
     ],
     shared_libs: [
         "libbinder_ndk",
+    ],
+}
+
+// Lean-sensor code (imu/): no Android dependencies, shared by the HAL and
+// the host replay tool.
+filegroup {
+    name: "motodash_imu_srcs",
+    srcs: [
+        "imu/I2cBus.cpp",
+        "imu/ImuLog.cpp",
+        "imu/ImuSource.cpp",
+        "imu/LeanEstimator.cpp",
+        "imu/Sensors.cpp",
+        "imu/SyntheticImu.cpp",
+    ],
+}
+
+// Host replay of a raw IMU capture through the lean estimator, for tuning
+// against a real ride. See tests/TESTING.md "Ride capture".
+cc_binary {
+    name: "motorcycle_imu_replay",
+    host_supported: true,
+    device_supported: false,
+    local_include_dirs: ["."],
+    srcs: [
+        "tests/ImuReplayTool.cpp",
+        ":motodash_imu_srcs",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
     ],
 }
 

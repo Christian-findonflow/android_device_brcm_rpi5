@@ -95,6 +95,7 @@ MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
     if (mImuThread.joinable()) {
         mImuThread.join();
     }
+    mImuLog.close();
     closeCapture();
     if (mCanSocket >= 0) {
         close(mCanSocket);
@@ -2732,6 +2733,7 @@ void MotorcycleVehicleHardware::imuThread() {
             mImuSourceBits = 0;
             mImuLevelFailed = false;
             publishImuStatus(now);
+            mImuLog.close();
             nextProbeNs = now + 2LL * 1000000000LL;
             continue;
         }
@@ -2749,6 +2751,13 @@ void MotorcycleVehicleHardware::imuThread() {
                 };
                 setF(VENDOR_BARO_HPA, pa / 100.0f);
                 setF(VENDOR_ALTITUDE_M, imu::Bmp280::altitudeM(pa));
+                if (mImuLog.isOpen()) {
+                    imu::ImuLogBaro b;
+                    b.tS = now / 1e9;
+                    b.pressurePa = pa;
+                    b.tempC = t;
+                    mImuLog.writeBaro(b);
+                }
             }
         }
         if (!sleepUnlessStopping(kImuPeriodMs)) break;
@@ -2808,6 +2817,7 @@ void MotorcycleVehicleHardware::processImuSample(const imu::ImuSample& s, float 
     const auto& st = mLean.state();
     publishImuStatus(nowNs);
     if (st.valid && speedValid) trackRideLean(st.rollDeg, speed);
+    captureImuSample(s, speed, speedValid, st, nowNs);
 
     if (st.valid && nowNs - mLastLeanPublishNs >= kLeanPublishNs) {
         mLastLeanPublishNs = nowNs;
@@ -2836,6 +2846,45 @@ void MotorcycleVehicleHardware::processImuSample(const imu::ImuSample& s, float 
         t.timestamp = nowNs;
         notifyPropertyChange(VENDOR_IMU_TEMP_C, t);
     }
+}
+
+void MotorcycleVehicleHardware::captureImuSample(const imu::ImuSample& s, float speedMps,
+                                                 bool speedValid,
+                                                 const imu::LeanEstimator::State& st,
+                                                 int64_t nowNs) {
+    // Rides with the CAN capture on also get the raw sensor stream, so a
+    // real ride can be replayed through the estimator on the host
+    // (motorcycle_imu_replay). Same directory, imu-<epoch>.log.
+    if (!mCaptureEnabled.load(std::memory_order_relaxed)) {
+        if (mImuLog.isOpen()) {
+            LOG(INFO) << "IMU capture closed after " << mImuLog.bytes() << " bytes";
+            mImuLog.close();
+        }
+        return;
+    }
+    if (!mImuLog.isOpen()) {
+        struct timeval tv;
+        gettimeofday(&tv, nullptr);
+        if (!mImuLog.open(mCaptureDir, static_cast<long>(tv.tv_sec))) {
+            if (!mImuLogFailureLogged) {
+                LOG(ERROR) << "IMU capture: cannot open " << mImuLog.path() << ": "
+                           << strerror(errno);
+                mImuLogFailureLogged = true;
+            }
+            return;
+        }
+        LOG(INFO) << "IMU capture started: " << mImuLog.path();
+    }
+    imu::ImuLogRecord r;
+    r.tS = nowNs / 1e9;
+    r.sample = s;
+    r.speedMps = speedMps;
+    r.speedValid = speedValid;
+    r.rollDeg = st.rollDeg;
+    r.pitchDeg = st.pitchDeg;
+    r.status = mImuStatus;
+    mImuLog.writeSample(r);
+    mImuLog.syncIfDue(nowNs);
 }
 
 void MotorcycleVehicleHardware::publishImuStatus(int64_t nowNs) {

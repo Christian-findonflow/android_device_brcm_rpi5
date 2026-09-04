@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "imu/ImuLog.h"
 #include "imu/ImuSource.h"
 #include "imu/LeanEstimator.h"
 #include "imu/Sensors.h"
@@ -471,6 +472,70 @@ TEST(SimImuSource, ScenarioFileDrivesConsistentSamples) {
         if (!src.read(&s, nullptr)) break;
     }
     EXPECT_FALSE(src.read(&s, nullptr));  // file gone = source gone
+}
+
+// ---------------------------------------------------------------------------
+// Raw capture format
+// ---------------------------------------------------------------------------
+
+TEST(ImuLog, RoundTrip) {
+    std::string path;
+    {
+        ImuLogWriter w;
+        ASSERT_TRUE(w.open(std::string(testing::TempDir()), 1757000000L));
+        path = w.path();
+        EXPECT_NE(path.find("imu-1757000000.log"), std::string::npos);
+        ImuLogRecord r;
+        r.tS = 12.345;
+        r.sample.accelG = Vec3(0.01234f, -0.5f, 0.86603f);
+        r.sample.gyroDps = Vec3(-1.5f, 22.125f, 0.0f);
+        r.speedMps = 15.55f;
+        r.speedValid = true;
+        r.rollDeg = 29.9f;
+        r.pitchDeg = -1.25f;
+        r.status = 63;
+        ASSERT_TRUE(w.writeSample(r));
+        ImuLogBaro b;
+        b.tS = 12.35;
+        b.pressurePa = 100653.3f;
+        b.tempC = 25.08f;
+        ASSERT_TRUE(w.writeBaro(b));
+        r.tS = 12.355;
+        r.speedValid = false;
+        ASSERT_TRUE(w.writeSample(r));
+        w.syncIfDue(20000000000LL);
+        EXPECT_GT(w.bytes(), 100u);
+    }
+    ImuLogReader reader;
+    ASSERT_TRUE(reader.open(path));
+    ImuLogRecord r;
+    ImuLogBaro b;
+    bool isBaro = true;
+    ASSERT_TRUE(reader.next(&r, &b, &isBaro));
+    EXPECT_FALSE(isBaro);
+    EXPECT_NEAR(r.tS, 12.345, 1e-6);
+    EXPECT_NEAR(r.sample.accelG.x, 0.01234f, 1e-5f);
+    EXPECT_NEAR(r.sample.accelG.z, 0.86603f, 1e-5f);
+    EXPECT_NEAR(r.sample.gyroDps.y, 22.125f, 1e-3f);
+    EXPECT_NEAR(r.speedMps, 15.55f, 1e-3f);
+    EXPECT_TRUE(r.speedValid);
+    EXPECT_NEAR(r.rollDeg, 29.9f, 1e-3f);
+    EXPECT_NEAR(r.pitchDeg, -1.25f, 1e-3f);
+    EXPECT_EQ(r.status, 63);
+    ASSERT_TRUE(reader.next(&r, &b, &isBaro));
+    EXPECT_TRUE(isBaro);
+    EXPECT_NEAR(b.pressurePa, 100653.3f, 0.1f);
+    EXPECT_NEAR(b.tempC, 25.08f, 1e-3f);
+    ASSERT_TRUE(reader.next(&r, &b, &isBaro));
+    EXPECT_FALSE(isBaro);
+    EXPECT_FALSE(r.speedValid);
+    EXPECT_FALSE(reader.next(&r, &b, &isBaro));
+    std::remove(path.c_str());
+
+    // Garbage and comments are skipped, not misread.
+    EXPECT_FALSE(ImuLogReader::parseLine("# header", &r, &b, &isBaro));
+    EXPECT_FALSE(ImuLogReader::parseLine("I 1.0 0.1", &r, &b, &isBaro));
+    EXPECT_FALSE(ImuLogReader::parseLine("", &r, &b, &isBaro));
 }
 
 }  // namespace
