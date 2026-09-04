@@ -157,8 +157,19 @@ sealed 2026-09-04 13:18):
     card with per-wheel pressure/temperature and low-pressure warnings.
   - **Dashcam**: needs a Pi camera module; loop recording + event save on
     hard braking (we already see regen/brake current).
-  - **Lean angle / ride telemetry**: needs an IMU HAT (MPU-6050 class);
-    live lean on the cluster, max lean in the ride summary.
+  - **Lean angle / ride telemetry** - hardware decided 2026-09-04: NOT a HAT
+    (the header already carries the CAN HAT, plus an NVMe HAT). The Seeed
+    CAN-FD HAT v2 has two Grove I2C ports, so a **Seeed Grove IMU 10DOF v2.0
+    (MPU-9250 + BMP280)** plugs straight in on a Grove cable; both chips have
+    drivers compiled into our prebuilt 6.12 Pi kernel (inv_mpu6050=y,
+    bmp280=y). Boot config: uncomment `dtparam=i2c_arm=on`, add
+    `dtoverlay=i2c-sensor,mpu9250,bmp280`. The DFRobot Fermion 10-DOF
+    (ADXL345/ITG-3205/HMC5883L) would NOT work without a kernel rebuild.
+    Plan: VHAL sensor thread (~100 Hz from IIO), complementary filter for
+    roll/pitch (pure, gtested), Workshop "Level" to zero mounting offsets,
+    vendor props roll/pitch/g, cluster lean arc, max lean L/R in the ride
+    summary; then crash/drop detection, braking g stats, grade-aware Wh/km
+    from the barometer. Mount the module rigidly inside the dash enclosure.
 - **Speed limit on the cluster - NOT feasible via OsmAnd AIDL** (checked
   2026-09-04: neither the V1 nor V2 API exposes the current road's speed
   limit; only GPX max speed). Options: an in-house OSM lookup from offline
