@@ -157,6 +157,14 @@ $A shell "cmd car_service set-property-value 0x21400068 0 0" >/dev/null 2>&1
 sleep 2
 ST=$(prop $PROP_IMUSTATUS)
 check "calibration cleared (status ${ST:-none})" "$([ "$((${ST:-0} & 12))" = "0" ] && echo 1 || echo 0)" "neither LEVEL_SET nor FORWARD_SET"
+say "-- ride capture switch also records the raw IMU stream"
+$A shell "cmd car_service set-property-value 0x21400046 0 1" >/dev/null 2>&1
+sleep 4
+IMULOG=$($A shell "ls /data/vendor/motodash/imu-*.log 2>/dev/null | head -1" | tr -d '\r')
+LINES=$($A shell "wc -l < ${IMULOG:-/nonexistent} 2>/dev/null" | tr -d '\r ')
+check "imu-*.log written at ~100 Hz (${LINES:-0} lines in 4 s)" "$([ "${LINES:-0}" -ge 200 ] 2>/dev/null && echo 1 || echo 0)" "capture switch must also log the sensor"
+$A shell "cmd car_service set-property-value 0x21400046 0 0" >/dev/null 2>&1
+$A shell "rm -f /data/vendor/motodash/imu-*.log /data/vendor/motodash/can-*.log"
 $A shell "rm -f $IMU_SIM"
 sleep 3
 ST=$(prop $PROP_IMUSTATUS)
