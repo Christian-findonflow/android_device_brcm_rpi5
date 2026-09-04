@@ -165,9 +165,19 @@ sealed 2026-09-04 13:18):
     plugs straight in) or, via a $1.95 Qwiic-to-Grove adapter cable (SparkFun
     PRT-15109), **Adafruit ISM330DHCX** (industrial-grade 6-axis, same lsm6dsx
     driver) plus an Adafruit BMP280 for altitude. All 6-axis = lean, pitch,
-    g-forces; a magnetometer is not needed for lean. Boot config: uncomment `dtparam=i2c_arm=on`, add
-    `dtoverlay=i2c-sensor,mpu9250,bmp280`. The DFRobot Fermion 10-DOF
-    (ADXL345/ITG-3205/HMC5883L) would NOT work without a kernel rebuild.
+    g-forces; a magnetometer is not needed for lean.
+    CHOSEN 2026-09-04: **Adafruit 4502 ISM330DHCX** (Mouser) + Qwiic-to-Grove
+    cable. Bring-up: uncomment `dtparam=i2c_arm=on`; the built-in lsm6dsx driver
+    knows ism330dhcx (driver string confirmed in the kernel Image) but the Pi
+    i2c-sensor overlay has no param for it, so instantiate at boot from an init
+    .rc line: `write /sys/bus/i2c/devices/i2c-1/new_device "ism330dhcx 0x6a"`
+    (0x6b if the address jumper is bridged). Optional Adafruit BMP280 on the
+    same cable: `dtoverlay=i2c-sensor,bmp280` (addr 0x77 on Adafruit boards:
+    `bmp280,addr=0x77`). A custom overlay is also possible with
+    prebuilts/misc/linux-x86/dtc. The device then appears as
+    /sys/bus/iio/devices/iio:deviceN with in_accel_*/in_anglvel_* raw+scale.
+    The DFRobot Fermion 10-DOF (ADXL345/ITG-3205/HMC5883L) would NOT work
+    without a kernel rebuild.
     GPS stays USB (decided 2026-09-04): our GNSS HAL (device/brcm/rpi5/gnss_hal)
     reads NMEA GGA/RMC/GSA/GSV/VTG from /dev/ttyACM0 at up to 115200 baud, so any
     USB u-blox puck works unchanged; a Grove/I2C GPS would need a new HAL path
