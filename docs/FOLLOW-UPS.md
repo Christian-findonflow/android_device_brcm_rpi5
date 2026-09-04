@@ -137,9 +137,12 @@ sealed 2026-09-04 13:18):
   or retire the repo.
 
 ### Hardware shortlist (2026-09-04, from the rider-experience review)
-- **Pi 5 RTC battery** (official ML2020 cell): rtc-rpi + HCTOSYS are in the
-  kernel, so with a battery the clock survives key-off - ride summaries,
-  capture timestamps and the weather cache age all depend on it. Cheap, buy.
+- **Pi 5 RTC battery** (official ML2020 cell, plugs into the Pi 5's own 2-pin
+  BAT connector - NOT the CAN HAT's coin-cell holder): rtc-rpi + HCTOSYS are
+  in the kernel, so the Pi's clock survives key-off - ride summaries, capture
+  timestamps and the weather cache age all depend on it. The Seeed HAT's own
+  RTC is an NXP PCF85063 at 0x51, and its driver is NOT in our kernel, so a
+  cell in the HAT holder would do nothing here. Cheap, buy.
 - **Active Cooler** if not fitted: a sealed dash enclosure in summer will
   throttle a Pi 5.
 - **BLE TPMS valve caps** (generic, broadcast manufacturer data): Pi 5 BT
