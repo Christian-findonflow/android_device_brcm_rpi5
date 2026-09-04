@@ -185,6 +185,19 @@ sealed 2026-09-04 13:18):
     Pi 4's BCM2835; Pi 5's RP1 DesignWare controller should be fine, and the
     escape hatch is UART-RVC mode through a CP210x/CH341 USB-serial dongle
     (both drivers = y): 100 Hz yaw/pitch/roll as a trivial serial stream.
+    DESIGN INSIGHT (2026-09-04, after Christian asked 'are we sure'): in a balanced
+    corner the apparent gravity aligns with the bike, so ANY accelerometer-based
+    gravity estimate reads ~0 deg lean mid-bend; every IMU-only AHRS (BNO085
+    included) survives corners only by gyro integration. The genuinely best
+    motorcycle solution is vehicle-aware fusion, which only we can do: lateral
+    acceleration = CAN wheel speed x gyro yaw rate, subtracted from the accel
+    vector before the gravity estimate (how OEM systems such as Bosch MSC do it),
+    gyro-integrated roll corrected only when straight (|a|~g, yaw rate ~0). That
+    makes the sensor choice secondary: ISM330DHCX (kernel driver, raw axes) + our
+    CAN-aware filter is the cheaper, fully-testable path and beats a generic
+    on-chip AHRS in long bends; BNO085 remains the upgrade if a calibrated gyro,
+    magnetometer heading or the stability classifier prove worth the SH-2 work.
+    Recommendation now: ISM330DHCX + BMP280, vehicle-aware fusion in the VHAL.
     Cabling: STEMMA QT/Qwiic boards carry two PARALLEL connectors, so daisy-chain:
     HAT Grove port -> Qwiic-to-Grove cable -> IMU -> Qwiic-Qwiic cable (Adafruit
     4399 50 mm / 4210 100 mm) -> BMP280. One I2C bus (i2c-1), devices told apart
