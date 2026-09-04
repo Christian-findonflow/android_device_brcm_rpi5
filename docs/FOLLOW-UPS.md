@@ -124,6 +124,33 @@ entries below and the git log of the three forks.
   or retire the repo.
 
 ### Features
+- **Rider nice-to-haves (decided 2026-09-04) - IMPLEMENTED same day**: weather/rain
+  card (Open-Meteo, keyed off the last GPS fix) + Breezy Weather app, "find
+  charger" shortcut on the range card (OsmAnd charging-station POI search),
+  ride summary at key-off, maintenance log with odometer reminders, AntennaPod
+  for podcasts. Shipped as: header weather chip (2 h rain chance + temp,
+  cached with age when offline, tap -> Breezy Weather), header charger bolt
+  (OsmAnd geo search "charging station"), Service log screen (7 odometer-keyed
+  items, Done stamps the odometer) reachable from native Settings and the
+  Motorcycle settings screen - Christian vetoed a dashboard pill, so the only
+  dashboard trace is a small amber dot on the settings gear when something is
+  due (never-recorded items do not count),
+  LAST RIDE line in the range card (HAL VENDOR_RIDE_* at key-off / 5 min
+  parked, persisted across reboots), AntennaPod + Breezy Weather bundled like
+  OsmAnd (packages/apps/<App>/, presigned prebuilts). Also removed Calendar,
+  Messaging (SIM SMS), Gallery, Local Media Player; Clock kept (Christian).
+  Parked for later, Christian likes them:
+  - **TPMS**: cheap BLE valve-cap sensors -> a BLE service feeding a cockpit
+    card with per-wheel pressure/temperature and low-pressure warnings.
+  - **Dashcam**: needs a Pi camera module; loop recording + event save on
+    hard braking (we already see regen/brake current).
+  - **Lean angle / ride telemetry**: needs an IMU HAT (MPU-6050 class);
+    live lean on the cluster, max lean in the ride summary.
+- **Speed limit on the cluster - NOT feasible via OsmAnd AIDL** (checked
+  2026-09-04: neither the V1 nor V2 API exposes the current road's speed
+  limit; only GPX max speed). Options: an in-house OSM lookup from offline
+  data (heavy), or a future OsmAnd API addition. Parked.
+
 - **Range model refinements** (base model DONE 2026-08-30: HAL learns a Wh/km
   EMA over 200m chunks, publishes RANGE_REMAINING, pack energy configurable
   via VENDOR_CFG_PACK_ENERGY_WH / settings UI; cluster + cockpit + arrival

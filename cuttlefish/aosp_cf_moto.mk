@@ -65,7 +65,7 @@ PRODUCT_PACKAGES += \
     moto_cf_setup.sh
 
 # Navigation app for the maps tile / maps button
-PRODUCT_PACKAGES += OsmAnd
+PRODUCT_PACKAGES += OsmAnd AntennaPod BreezyWeather
 
 # Pre-granted permissions for bundled apps (no permission dialogs on a bike)
 PRODUCT_COPY_FILES += \

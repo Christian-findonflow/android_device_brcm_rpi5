@@ -111,6 +111,10 @@ sleep 12
 L=$(prop $PROP_LINK)
 check "links dead (got $L)" "$([ "$L" = "0" ] && echo 1 || echo 0)" "LINK_STATUS should be 0"
 V=$(prop $PROP_SPEED)
+RS=$(prop 557842505)
+check "ride summary published at key-off (seq ${RS:-none})" "$([ "${RS:-0}" -ge 1 ] 2>/dev/null && echo 1 || echo 0)" "VENDOR_RIDE_SEQ"
+RM=$(prop 559939664)
+check "ride distance ~1.77km (got ${RM:-0}m)" "$(near ${RM:-0} 1770 60)" "VENDOR_RIDE_DISTANCE_M"
 check "speed 0 (got $V)" "$(near ${V:-1} 0 0.01)" "last frame was standstill"
 
 say "-- ride bookkeeping"

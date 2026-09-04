@@ -142,6 +142,17 @@ too, as are our own 0x1026105A display reports.
 
 ## Simulated ride (no bike needed)
 
+`e2e_can_test.sh` now also asserts the **ride summary** (VENDOR_RIDE_SEQ /
+RIDE_DISTANCE_M) published by the HAL when the controller link dies after the
+ride - 27 checks in total. Launcher pure-logic tests (CarLauncherTests,
+MotorcycleLogicTest) cover the Open-Meteo weather parse/chip text and the
+maintenance-schedule due math alongside units, PIN and solar math (14 tests).
+Run them filtered - `atest CarLauncherTests:com.android.car.carlauncher.MotorcycleLogicTest`
+- because the rest of the CarLauncherTests module tests the stock AAOS home
+screen we replaced, and fails by design. Afterwards
+`adb uninstall com.android.car.carlauncher.test`: the test APK registers a
+second HOME handler and the HOME key shows a chooser while it is installed.
+
 `make_ride_log.py` synthesizes a full ride (accelerate, 56 km/h cruise, regen
 deceleration, 20 km/h stretch, stop) as controller 0x10261022 frames at 10 Hz
 plus BMS 0x6B1 at 1 Hz:

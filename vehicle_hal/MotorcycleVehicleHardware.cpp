@@ -517,6 +517,13 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     // Pack health and capacity
     addFloatVendorProp(VENDOR_PACK_SOH, 0.0f, 100.0f, 100.0f);           // State of Health %
     addFloatVendorProp(VENDOR_PACK_CURRENT, -3276.7f, 3276.7f, 0.0f);   // BMS signed current, A (+discharge)
+
+    // Ride summary (last ride; restored from persist props at startup)
+    addFloatVendorProp(VENDOR_RIDE_DISTANCE_M, 0.0f, 10000000.0f, 0.0f);
+    addFloatVendorProp(VENDOR_RIDE_DURATION_S, 0.0f, 1000000.0f, 0.0f);
+    addFloatVendorProp(VENDOR_RIDE_WH_PER_KM, -1000.0f, 1000.0f, 0.0f);
+    addFloatVendorProp(VENDOR_RIDE_MAX_SPEED_MPS, 0.0f, 100.0f, 0.0f);
+    addIntVendorProp(VENDOR_RIDE_SEQ, 0);
     addFloatVendorProp(VENDOR_PACK_DOD, 0.0f, 100.0f, 0.0f);             // Depth of Discharge %
     addFloatVendorProp(VENDOR_PACK_AMPHOURS, 0.0f, 500.0f, 100.0f);      // Capacity Ah
     addFloatVendorProp(VENDOR_PACK_RESISTANCE, 0.0f, 1000.0f, 0.0f);     // Resistance mOhm
@@ -1529,9 +1536,11 @@ void MotorcycleVehicleHardware::checkLinkTimeouts(int64_t nowNs) {
     constexpr int64_t kBmsTimeoutNs = 5000000000LL;
 
     int64_t lastController = mLastControllerFrameNs.load(std::memory_order_relaxed);
-    if (lastController != 0 && nowNs - lastController > kControllerTimeoutNs) {
+    bool controllerDead = lastController != 0 && nowNs - lastController > kControllerTimeoutNs;
+    if (controllerDead) {
         setLinkBit(LINK_CONTROLLER, false);
     }
+    endRideIfDue(nowNs, controllerDead);
     int64_t lastBms = mLastBmsFrameNs.load(std::memory_order_relaxed);
     if (lastBms != 0 && nowNs - lastBms > kBmsTimeoutNs) {
         setLinkBit(LINK_BMS, false);
@@ -1574,6 +1583,95 @@ void MotorcycleVehicleHardware::updateChargingState(int rpm, float current, int6
     notifyPropertyChange(VENDOR_CHARGING, value);
 }
 
+// ---------------------------------------------------------------------------
+// Ride summary
+// ---------------------------------------------------------------------------
+namespace {
+constexpr float kRideMovingSpeedMps = 0.5f;
+constexpr int64_t kRideStandstillEndNs = 5LL * 60 * 1000000000LL;   // 5 min parked = ride over
+constexpr double kRideMinMeters = 200.0;                             // shorter is a shuffle, not a ride
+}  // namespace
+
+void MotorcycleVehicleHardware::trackRide(float speedMps, int64_t timestamp) {
+    std::lock_guard<std::mutex> lock(mRideMutex);
+    bool moving = speedMps > kRideMovingSpeedMps;
+    if (!mRideActive) {
+        if (!moving) return;
+        mRideActive = true;
+        mRideStartMeters = mOdometerMeters;
+        mRideStartNs = timestamp;
+        mRideMovingNs = 0;
+        mRideEnergyWh = 0.0;
+        mRideMaxSpeedMps = 0.0f;
+        mRideLastTrackNs = timestamp;
+        mRideLastMoveNs = timestamp;
+        LOG(INFO) << "Ride started at odo " << mOdometerMeters << " m";
+        return;
+    }
+    int64_t delta = timestamp - mRideLastTrackNs;
+    mRideLastTrackNs = timestamp;
+    if (moving) {
+        if (delta > 0 && delta < kMaxDistanceStepNs) mRideMovingNs += delta;
+        mRideLastMoveNs = timestamp;
+        if (speedMps > mRideMaxSpeedMps) mRideMaxSpeedMps = speedMps;
+    }
+}
+
+void MotorcycleVehicleHardware::addRideEnergy(double wh) {
+    std::lock_guard<std::mutex> lock(mRideMutex);
+    if (mRideActive) mRideEnergyWh += wh;
+}
+
+void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
+    float meters, seconds, whPerKm, maxMps;
+    int32_t seq;
+    {
+        std::lock_guard<std::mutex> lock(mRideMutex);
+        if (!mRideActive) return;
+        bool parkedLong = (nowNs - mRideLastMoveNs) > kRideStandstillEndNs;
+        if (!linkDead && !parkedLong) return;
+        mRideActive = false;
+        double distance = mOdometerMeters - mRideStartMeters;
+        if (distance < kRideMinMeters) {
+            LOG(INFO) << "Ride ended after " << distance << " m - too short to summarise";
+            return;
+        }
+        meters = static_cast<float>(distance);
+        seconds = static_cast<float>(mRideMovingNs / 1e9);
+        whPerKm = static_cast<float>(mRideEnergyWh / (distance / 1000.0));
+        maxMps = mRideMaxSpeedMps;
+        seq = ++mRideSeq;
+    }
+    LOG(INFO) << "Ride #" << seq << " ended (" << (linkDead ? "key off" : "parked") << "): "
+              << meters << " m, " << seconds << " s moving, " << whPerKm << " Wh/km, max "
+              << maxMps << " m/s";
+    publishRideSummary(meters, seconds, whPerKm, maxMps, seq, nowNs);
+    persistConfig("persist.vendor.motodash.ride.meters", std::to_string(meters));
+    persistConfig("persist.vendor.motodash.ride.seconds", std::to_string(seconds));
+    persistConfig("persist.vendor.motodash.ride.whperkm", std::to_string(whPerKm));
+    persistConfig("persist.vendor.motodash.ride.maxmps", std::to_string(maxMps));
+    persistConfig("persist.vendor.motodash.ride.seq", std::to_string(seq));
+}
+
+void MotorcycleVehicleHardware::publishRideSummary(float meters, float seconds, float whPerKm,
+                                                   float maxMps, int32_t seq, int64_t timestamp) {
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto setF = [&](int32_t prop, float v) {
+        auto& value = mCurrentValues[prop];
+        value.value.floatValues[0] = v;
+        value.timestamp = timestamp;
+        notifyPropertyChange(prop, value);
+    };
+    setF(VENDOR_RIDE_DISTANCE_M, meters);
+    setF(VENDOR_RIDE_DURATION_S, seconds);
+    setF(VENDOR_RIDE_WH_PER_KM, whPerKm);
+    setF(VENDOR_RIDE_MAX_SPEED_MPS, maxMps);
+    auto& s = mCurrentValues[VENDOR_RIDE_SEQ];
+    s.value.int32Values[0] = seq;
+    s.timestamp = timestamp;
+    notifyPropertyChange(VENDOR_RIDE_SEQ, s);   // last, so listeners see complete values
+}
+
 void MotorcycleVehicleHardware::accumulateDistance(float speedMps, int64_t timestamp) {
     if (mTripResetRequested.exchange(false)) {
         mTripMeters = 0.0;
@@ -1589,6 +1687,7 @@ void MotorcycleVehicleHardware::accumulateDistance(float speedMps, int64_t times
     double metres = static_cast<double>(speedMps) * (static_cast<double>(deltaNs) / 1e9);
     mOdometerMeters += metres;
     mTripMeters += metres;
+    trackRide(speedMps, timestamp);
 }
 
 void MotorcycleVehicleHardware::accumulateEnergy(float voltage, float current, float speedMps,
@@ -1606,7 +1705,9 @@ void MotorcycleVehicleHardware::accumulateEnergy(float voltage, float current, f
     // Positive current = discharge, so V*I is consumption; regen while moving
     // subtracts, which is exactly what it does to real consumption.
     double dtHours = static_cast<double>(deltaNs) / 3.6e12;
-    mChunkEnergyWh += static_cast<double>(voltage) * static_cast<double>(current) * dtHours;
+    double wh = static_cast<double>(voltage) * static_cast<double>(current) * dtHours;
+    mChunkEnergyWh += wh;
+    addRideEnergy(wh);
 
     double chunkMeters = mOdometerMeters - mChunkStartMeters;
     if (chunkMeters < kRangeChunkMeters) {
@@ -2160,6 +2261,20 @@ void MotorcycleVehicleHardware::loadConfig() {
               << (mTripMeters / 1000.0) << "km";
 
     // Range model: learned consumption and configured pack energy
+    if (property_get("persist.vendor.motodash.ride.seq", propValue, "") > 0) {
+        int32_t seq = atoi(propValue);
+        char m[PROPERTY_VALUE_MAX], s[PROPERTY_VALUE_MAX], w[PROPERTY_VALUE_MAX], x[PROPERTY_VALUE_MAX];
+        property_get("persist.vendor.motodash.ride.meters", m, "0");
+        property_get("persist.vendor.motodash.ride.seconds", s, "0");
+        property_get("persist.vendor.motodash.ride.whperkm", w, "0");
+        property_get("persist.vendor.motodash.ride.maxmps", x, "0");
+        {
+            std::lock_guard<std::mutex> lock(mRideMutex);
+            mRideSeq = seq;
+        }
+        publishRideSummary(atof(m), atof(s), atof(w), atof(x), seq, elapsedRealtimeNano());
+        LOG(INFO) << "Restored last ride summary #" << seq;
+    }
     if (property_get("persist.vendor.motodash.whperkm", propValue, "") > 0) {
         float v = strtof(propValue, nullptr);
         if (v >= kMinUsableWhPerKm && v <= kMaxChunkWhPerKm) {

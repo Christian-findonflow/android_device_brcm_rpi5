@@ -58,6 +58,7 @@ class MotorcycleVehicleHardwareTestPeer {
         mHw->updateChargingState(rpm, current, ts);
     }
     void setChargingDwell(int64_t ns) { mHw->mChargingDwellNs = ns; }
+    void endRideIfDue(int64_t nowNs, bool linkDead) { mHw->endRideIfDue(nowNs, linkDead); }
     // Wire a socketpair in place of the CAN socket so tests can read frames
     // the HAL transmits (display reports).
     void setCanSocket(int fd) { mHw->mCanSocket = fd; }
@@ -119,6 +120,7 @@ class MotorcycleVehicleHardwareTest : public ::testing::Test {
         // persist properties in the constructor, and property_set persists
         // in-process on the host - clear them BEFORE construction.
         property_set("persist.vendor.motodash.whperkm", "");
+        property_set("persist.vendor.motodash.ride.seq", "");
         property_set("persist.vendor.motodash.cfg.pack_energy_wh", "");
         property_set("persist.vendor.motodash.cfg.units_speed", "");
         property_set("persist.vendor.motodash.cfg.units_distance", "");
@@ -890,6 +892,68 @@ TEST_F(MotorcycleVehicleHardwareTest, BmsSignedCurrentDrivesChargingDetection) {
     auto charging = lastEvent(VENDOR_CHARGING);
     ASSERT_TRUE(charging.has_value());
     EXPECT_EQ(charging->value.int32Values[0], 1);
+}
+
+// ============================================================================
+// Ride summary
+// ============================================================================
+
+TEST_F(MotorcycleVehicleHardwareTest, RideSummaryPublishedAtKeyOff) {
+    // 100 s at 15 m/s = 1500 m, drawing 72 V x 45 A = 3240 W -> 90 Wh -> 60 Wh/km.
+    // Stepped at the controller's real 20 Hz cadence: accumulateDistance
+    // ignores gaps wider than kMaxDistanceStepNs.
+    int64_t t = 1000000000LL;
+    for (int i = 0; i < 2000; i++) {
+        t += 50000000LL;
+        mPeer->accumulateDistance(15.0f, t);
+        mPeer->accumulateEnergy(72.0f, 45.0f, 15.0f, t);
+    }
+    EXPECT_FALSE(lastEvent(VENDOR_RIDE_SEQ).has_value() &&
+                 lastEvent(VENDOR_RIDE_SEQ)->value.int32Values[0] > 0);
+
+    // Key off: the controller link dies.
+    mPeer->endRideIfDue(t + 2000000000LL, /*linkDead=*/true);
+
+    auto seq = lastEvent(VENDOR_RIDE_SEQ);
+    ASSERT_TRUE(seq.has_value());
+    EXPECT_EQ(seq->value.int32Values[0], 1);
+    EXPECT_NEAR(lastEvent(VENDOR_RIDE_DISTANCE_M)->value.floatValues[0], 1500.0f, 20.0f);
+    EXPECT_NEAR(lastEvent(VENDOR_RIDE_DURATION_S)->value.floatValues[0], 99.0f, 2.0f);
+    EXPECT_NEAR(lastEvent(VENDOR_RIDE_WH_PER_KM)->value.floatValues[0], 60.0f, 2.0f);
+    EXPECT_FLOAT_EQ(lastEvent(VENDOR_RIDE_MAX_SPEED_MPS)->value.floatValues[0], 15.0f);
+
+    // A second key-off without a new ride publishes nothing more.
+    mPeer->endRideIfDue(t + 4000000000LL, true);
+    EXPECT_EQ(lastEvent(VENDOR_RIDE_SEQ)->value.int32Values[0], 1);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, ShortShuffleIsNotARide) {
+    // 20 s at 5 m/s = 100 m (moving the bike in the garage): no summary.
+    int64_t t = 1000000000LL;
+    for (int i = 0; i < 400; i++) {
+        t += 50000000LL;
+        mPeer->accumulateDistance(5.0f, t);
+    }
+    mPeer->endRideIfDue(t + 2000000000LL, true);
+    auto seq = lastEvent(VENDOR_RIDE_SEQ);
+    EXPECT_FALSE(seq.has_value() && seq->value.int32Values[0] > 0);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, RideEndsAfterLongStandstill) {
+    int64_t t = 1000000000LL;
+    for (int i = 0; i < 1200; i++) {
+        t += 50000000LL;
+        mPeer->accumulateDistance(10.0f, t);   // 600 m
+    }
+    // Parked with the link alive: not over yet at 4 min, over at 6 min.
+    mPeer->endRideIfDue(t + 240LL * 1000000000LL, false);
+    auto seq = lastEvent(VENDOR_RIDE_SEQ);
+    EXPECT_FALSE(seq.has_value() && seq->value.int32Values[0] > 0);
+    mPeer->endRideIfDue(t + 360LL * 1000000000LL, false);
+    seq = lastEvent(VENDOR_RIDE_SEQ);
+    ASSERT_TRUE(seq.has_value());
+    EXPECT_EQ(seq->value.int32Values[0], 1);
+    EXPECT_NEAR(lastEvent(VENDOR_RIDE_DISTANCE_M)->value.floatValues[0], 600.0f, 15.0f);
 }
 
 TEST_F(MotorcycleVehicleHardwareTest, RegenStopDoesNotFlashCharging) {

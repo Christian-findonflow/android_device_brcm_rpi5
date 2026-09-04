@@ -104,7 +104,9 @@ PRODUCT_COPY_FILES += \
 
 # OsmAnd Navigation
 PRODUCT_PACKAGES += \
-    OsmAnd
+    OsmAnd \
+    AntennaPod \
+    BreezyWeather
 
 # Pre-granted permissions for bundled apps (no permission dialogs on a bike)
 PRODUCT_COPY_FILES += \

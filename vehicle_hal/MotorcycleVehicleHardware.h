@@ -139,6 +139,14 @@ constexpr int32_t VENDOR_CFG_CAN_CAPTURE = 0x21400046;
 // controller's current field is documented as unsigned, so this is the
 // trustworthy sign for charging/regen decisions once the BMS answers.
 constexpr int32_t VENDOR_PACK_CURRENT = 0x21600047;
+// Ride summary, published once per ride when the ride ends (controller link
+// lost = key off, or 5 min at standstill). The last summary is persisted and
+// republished at boot so the cockpit can show "last ride" after a restart.
+constexpr int32_t VENDOR_RIDE_DISTANCE_M = 0x21600050;    // float, metres
+constexpr int32_t VENDOR_RIDE_DURATION_S = 0x21600051;    // float, seconds moving
+constexpr int32_t VENDOR_RIDE_WH_PER_KM = 0x21600052;     // float, net incl. regen
+constexpr int32_t VENDOR_RIDE_MAX_SPEED_MPS = 0x21600053; // float
+constexpr int32_t VENDOR_RIDE_SEQ = 0x21400049;           // int, increments per summary
 constexpr float CHARGING_CURRENT_THRESHOLD_A = -0.5f;
 
 // Fault flags from the controller, combined into one bitfield so the UI needs
@@ -267,6 +275,14 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void publishRange(int64_t timestamp);
     void updateStatusFlags(int32_t bits);
     void updateChargingState(int rpm, float current, int64_t nowNs);
+    // Ride accounting (see VENDOR_RIDE_*). trackRide runs on the CAN thread
+    // from accumulateDistance; endRideIfDue runs from the link watchdog too,
+    // hence the mutex.
+    void trackRide(float speedMps, int64_t timestamp);
+    void addRideEnergy(double wh);
+    void endRideIfDue(int64_t nowNs, bool linkDead);
+    void publishRideSummary(float meters, float seconds, float whPerKm, float maxMps,
+                            int32_t seq, int64_t timestamp);
     // Called by the watchdog (and tests, with an explicit now) to drop link
     // bits when frames stop arriving.
     void checkLinkTimeouts(int64_t nowNs);
@@ -410,6 +426,17 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     // the charging state is declared (kills the regen-stop flash).
     int64_t mChargingCandidateSinceNs = 0;
     std::atomic<int64_t> mChargingDwellNs{5LL * 1000000000LL};
+
+    std::mutex mRideMutex;
+    bool mRideActive = false;
+    double mRideStartMeters = 0.0;
+    int64_t mRideStartNs = 0;
+    int64_t mRideLastMoveNs = 0;
+    int64_t mRideMovingNs = 0;
+    int64_t mRideLastTrackNs = 0;
+    double mRideEnergyWh = 0.0;
+    float mRideMaxSpeedMps = 0.0f;
+    int32_t mRideSeq = 0;
 };
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle
