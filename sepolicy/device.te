@@ -1,1 +1,3 @@
 type cec_device, dev_type;
+# /dev/i2c-N: the dash IMU + barometer bus, read by the vehicle HAL
+type i2c_device, dev_type;

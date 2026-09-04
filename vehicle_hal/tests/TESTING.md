@@ -204,3 +204,79 @@ instantly). On the bike: shift through P/R/N/D, hold Sport, flip drive
 modes 1/2/3, and read exactly which nibble/bits change - then set the base
 to match. No laptop, no rebuild. Sport/drive-mode MAPPING (what the cluster
 should display for them) still needs the ride capture to design properly.
+
+## Lean sensor (IMU): tests before the hardware, bring-up after
+
+Software landed 2026-09-04, ahead of the parts (Adafruit 4502 ISM330DHCX +
+2651 BMP280 on the CAN HAT's Grove I2C port, ADA4528 Grove-to-QT cable, CAB1015
+QT-QT cable). Design notes in `vehicle_hal/imu/` headers and FOLLOW-UPS.md.
+
+**Why the HAL talks I2C itself.** Our 6.12 kernel compiles the lsm6dsx driver
+in but has no IIO trigger, and the Qwiic cable carries no interrupt line: the
+driver's only path is one-shot sysfs reads, which power the sensor up and down
+around every axis (tens of ms each, ~10 Hz for six axes). So the HAL opens
+`/dev/i2c-1` (I2C_RDWR) and drives both chips from `imu/Sensors.cpp` at a clean
+100 Hz burst read. Nothing in the kernel needs configuring beyond
+`dtparam=i2c_arm=on` (boot/config.txt), the ueventd ownership line and the
+`i2c_device` sepolicy type.
+
+**Tests (all run on the host, no hardware):**
+
+    atest --host motorcycle_vhal_test      # 41 HAL tests + 4 IMU-through-HAL + 18 imu/ tests
+
+`tests/ImuTest.cpp` drives the estimator with the synthetic IMU
+(`imu/SyntheticImu`): upright straight, an established 30 deg corner (where
+the accelerometer alone reads ~0 - the test asserts that first, then that the
+vehicle-aware filter reads 30), rolling into a corner through the gyro, CAN
+link loss mid-corner (lean must hold), an awkward mounting fixed by Level +
+learned forward axis (from acceleration and from braking), gyro bias learned
+at standstill and held on a long straight, hard braking not tilting roll,
+side-stand lean at standstill, sample gaps, Level rejection while moving; the
+ISM330DHCX and BMP280 drivers against a fake I2C bus (WHO_AM_I, register
+writes, burst decode, BMP280 compensation against the datasheet example,
+altitude round trip); and the scenario-file source. The HAL-level tests cover
+publishing, ride max-lean (speed-gated so the side stand does not count),
+the Level command with persistence, and Level rejection.
+
+**Simulator / e2e.** The HAL reads a scenario file when it exists:
+
+    adb shell "echo 'lean=30 alt=120' > /data/vendor/motodash/imu_sim"   # adb root
+
+Keys: `lean` (deg, + right), `pitch`, `rollrate` (deg/s), `along` (m/s^2),
+`alt` (m, drives the fake barometer), optional `speed` (m/s; default = the
+bike's live CAN speed, so a corner is always physically consistent with the
+speed the HAL believes). The HAL probes for a source every 5 s, so the file
+takes effect within seconds; delete it and the "sensor" unplugs. The cluster
+shows the lean arc once IMU_STATUS reports PRESENT; Workshop > Lean sensor
+shows status, raw axes, live lean/pitch and baro. `e2e_can_test.sh` now runs
+37 checks: it adds the simulated sensor, a 30 deg right and 20 deg left corner
+at cruise (lean, lateral g, status bits), ride max lean L/R in the summary,
+Level/clear through `cmd car_service set-property-value 0x21400068 0 1|0`, and
+source loss.
+
+**Bring-up checklist when the parts arrive (10 minutes):**
+
+1. Wire: HAT Grove I2C port -> ADA4528 -> ISM330DHCX -> CAB1015 -> BMP280.
+   Mount the IMU rigidly inside the dash enclosure, any orientation; the
+   BMP280 anywhere on the chain (keep it out of direct airflow/sun).
+2. Flash this image (I2C enabled in config.txt) and boot with the bike off.
+3. `adb shell ls -la /dev/i2c-1` must show `crw-rw---- vehicle_network system`.
+   `adb logcat -s android.hardware.automotive.vehicle@V4-motorcycle-service`
+   must show `IMU: ISM330DHCX family (WHO_AM_I 0x6B) on /dev/i2c-1, barometer
+   present`. If it says nothing is on the bus: check the cable seating, then
+   `dmesg | grep -i i2c` (bus present?), then `dmesg | grep avc` (sepolicy).
+   Address jumpers: `setprop persist.vendor.motodash.imu.addr 0x6b` /
+   `persist.vendor.motodash.imu.baro_addr 0x76`, then restart the HAL.
+4. Workshop > Lean sensor: the raw row must read ~1.00 g on one accel axis
+   and ~0 deg/s on the gyros. Tilt the module by hand and watch the axes.
+5. Bike upright on flat ground, held still: press **Level**. Status must say
+   `level OK · forward: learning`. (Rejected = the bike or the sensor moved.)
+6. Ride: the forward axis learns itself on the first straight pull-away
+   (about 12 m/s of accumulated speed change; a few strong accelerations).
+   Status flips to `forward OK`, the cluster arc appears and reads lean;
+   the Workshop row shows lean/pitch live. On the side stand it should read
+   roughly the stand angle; the ride summary ignores standstill lean.
+7. Sanity in the first corners: 20-30 deg on a normal bend, marker moving
+   the way the bike leans. If it reads mirrored, the learned forward axis is
+   backwards: Clear calibration, Level again and pull away hard in a straight
+   line (braking also teaches it, with the sign handled).

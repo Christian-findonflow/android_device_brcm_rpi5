@@ -22,3 +22,7 @@ set_prop(hal_can_socketcan, vendor_motodash_prop)
 # CAN capture (VENDOR_CFG_CAN_CAPTURE): candump-format logs under /data/vendor/motodash
 allow hal_can_socketcan motodash_data_file:dir create_dir_perms;
 allow hal_can_socketcan motodash_data_file:file create_file_perms;
+
+# Lean sensor (ISM330DHCX) + barometer (BMP280) on /dev/i2c-1, spoken to
+# directly with the I2C_RDWR ioctl (see vehicle_hal/imu/).
+allow hal_can_socketcan i2c_device:chr_file rw_file_perms;

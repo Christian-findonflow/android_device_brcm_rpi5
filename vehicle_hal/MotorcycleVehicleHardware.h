@@ -24,6 +24,9 @@
 #include <linux/can/raw.h>
 #include <linux/gpio.h>
 
+#include "imu/ImuSource.h"
+#include "imu/LeanEstimator.h"
+
 namespace android::hardware::automotive::vehicle::motorcycle {
 
 using ::aidl::android::hardware::automotive::vehicle::GetValueRequest;
@@ -147,6 +150,29 @@ constexpr int32_t VENDOR_RIDE_DURATION_S = 0x21600051;    // float, seconds movi
 constexpr int32_t VENDOR_RIDE_WH_PER_KM = 0x21600052;     // float, net incl. regen
 constexpr int32_t VENDOR_RIDE_MAX_SPEED_MPS = 0x21600053; // float
 constexpr int32_t VENDOR_RIDE_SEQ = 0x21400049;           // int, increments per summary
+// Inertial sensing: ISM330DHCX + BMP280 on /dev/i2c-1 (Grove port of the CAN
+// HAT), or the scenario file /data/vendor/motodash/imu_sim on the simulator.
+// Lean is estimated with the vehicle-aware filter in imu/LeanEstimator.h;
+// + = right. Level (up axis) comes from the Workshop, forward is learned.
+constexpr int32_t VENDOR_LEAN_DEG = 0x21600060;         // float, + = right
+constexpr int32_t VENDOR_PITCH_DEG = 0x21600061;        // float, + = nose up
+constexpr int32_t VENDOR_LAT_G = 0x21600062;            // float, + = right turn
+constexpr int32_t VENDOR_LONG_G = 0x21600063;           // float, + = accelerating
+constexpr int32_t VENDOR_BARO_HPA = 0x21600064;         // float
+constexpr int32_t VENDOR_ALTITUDE_M = 0x21600065;       // float, ISA from pressure
+constexpr int32_t VENDOR_IMU_TEMP_C = 0x21600066;       // float
+constexpr int32_t VENDOR_IMU_STATUS = 0x21400067;       // int bitfield (IMU_STATUS_*)
+constexpr int32_t VENDOR_CFG_IMU_LEVEL = 0x21400068;    // int RW: write 1 = capture level, 0 = clear calibration
+constexpr int32_t VENDOR_RIDE_MAX_LEAN_L = 0x21600069;  // float deg, with the ride summary
+constexpr int32_t VENDOR_RIDE_MAX_LEAN_R = 0x2160006A;  // float deg
+constexpr int32_t VENDOR_IMU_RAW = 0x2161006B;          // float[6] ax ay az (g) gx gy gz (dps), sensor frame
+constexpr int32_t IMU_STATUS_PRESENT = 1 << 0;
+constexpr int32_t IMU_STATUS_BARO = 1 << 1;
+constexpr int32_t IMU_STATUS_LEVEL_SET = 1 << 2;
+constexpr int32_t IMU_STATUS_FORWARD_SET = 1 << 3;
+constexpr int32_t IMU_STATUS_SIMULATED = 1 << 4;
+constexpr int32_t IMU_STATUS_VALID = 1 << 5;
+constexpr int32_t IMU_STATUS_LEVEL_FAILED = 1 << 6;
 constexpr float CHARGING_CURRENT_THRESHOLD_A = -0.5f;
 
 // Fault flags from the controller, combined into one bitfield so the UI needs
@@ -282,12 +308,22 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void addRideEnergy(double wh);
     void endRideIfDue(int64_t nowNs, bool linkDead);
     void publishRideSummary(float meters, float seconds, float whPerKm, float maxMps,
-                            int32_t seq, int64_t timestamp);
+                            float maxLeanL, float maxLeanR, int32_t seq, int64_t timestamp);
     // Called by the watchdog (and tests, with an explicit now) to drop link
     // bits when frames stop arriving.
     void checkLinkTimeouts(int64_t nowNs);
     void setLinkBit(int32_t bit, bool alive);
     void linkWatchdogThread();
+    // Inertial sensing (imu thread): reads the sensors or the simulator
+    // file at 100 Hz, runs the lean estimator, publishes VENDOR_LEAN_DEG
+    // and friends, and services the Workshop Level command. See imu/.
+    void imuThread();
+    std::unique_ptr<imu::ImuSource> openImuSource();
+    void processImuSample(const imu::ImuSample& s, float tempC, int64_t nowNs);
+    void publishImuStatus(int64_t nowNs);
+    void loadImuCalibration();
+    void persistImuCalibration();
+    void trackRideLean(float rollDeg, float speedMps);
     void sendDisplayReportIfDue(int64_t timestamp, float speedMps);
     // CAN capture to /data (see VENDOR_CFG_CAN_CAPTURE). Called for every
     // received frame (processCanFrame) and every frame we transmit.
@@ -436,7 +472,29 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int64_t mRideLastTrackNs = 0;
     double mRideEnergyWh = 0.0;
     float mRideMaxSpeedMps = 0.0f;
+    float mRideMaxLeanL = 0.0f;  // deg, this ride, speed-gated (imu thread)
+    float mRideMaxLeanR = 0.0f;
     int32_t mRideSeq = 0;
+
+    // Inertial sensing. Owned by the imu thread except the atomics, which
+    // the CAN thread (speed) and binder threads (Level command) write.
+    std::thread mImuThread;
+    imu::LeanEstimator mLean;
+    imu::LevelCapture mLevelCapture;
+    bool mLevelCapturing = false;
+    std::atomic<int> mLevelRequest{-1};  // -1 none, 1 capture level, 0 clear
+    std::atomic<float> mLastSpeedMps{0.0f};
+    int32_t mImuSourceBits = 0;     // PRESENT | BARO | SIMULATED of the open source
+    bool mImuLevelFailed = false;
+    int32_t mImuStatus = 0;         // last published VENDOR_IMU_STATUS
+    int64_t mLastImuSampleNs = 0;
+    int64_t mLastLeanPublishNs = 0;
+    int64_t mLastRawPublishNs = 0;
+    int64_t mLastBaroReadNs = 0;
+    std::string mImuI2cPath = "/dev/i2c-1";
+    int mImuAddr = 0x6A;
+    int mBaroAddr = 0x77;
+    std::string mImuSimPath = "/data/vendor/motodash/imu_sim";
 };
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle

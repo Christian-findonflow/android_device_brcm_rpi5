@@ -25,6 +25,13 @@ PROP_VOLT=559939585        # VENDOR_BATTERY_VOLTAGE
 PROP_FAULT=557842496       # VENDOR_FAULT_FLAGS
 PROP_CHARGING=557842500    # VENDOR_CHARGING
 PROP_RAWGEAR=557842504     # VENDOR_RAW_GEAR_STATUS
+PROP_LEAN=559939680        # VENDOR_LEAN_DEG (+ = right)
+PROP_LATG=559939682        # VENDOR_LAT_G
+PROP_IMUSTATUS=557842535   # VENDOR_IMU_STATUS bitfield
+PROP_MAXLEAN_L=559939689   # VENDOR_RIDE_MAX_LEAN_L
+PROP_MAXLEAN_R=559939690   # VENDOR_RIDE_MAX_LEAN_R
+IMU_SIM="/data/vendor/motodash/imu_sim"
+imu_sim() { $A shell "echo '$1' > $IMU_SIM"; }
 GEAR_DRIVE=8
 GEAR_PARK=4
 
@@ -50,6 +57,14 @@ say "-- generating and pushing ride (150s: accel, 56km/h cruise, regen, stop)"
 python3 "$HERE/make_ride_log.py" > /tmp/e2e_ride.log 2>/dev/null || { say "FATAL: make_ride_log.py failed"; exit 2; }
 $A push /tmp/e2e_ride.log /data/local/tmp/e2e_ride.log >/dev/null || { say "FATAL: adb push failed"; exit 2; }
 
+say "-- lean sensor: simulated (scenario file drives the synthetic IMU at the live CAN speed)"
+imu_sim "lean=0 alt=120"
+for i in 1 2 3 4 5 6 7; do   # the HAL probes for a source every 5 s
+  ST=$(prop $PROP_IMUSTATUS); [ "$((${ST:-0} & 16))" = "16" ] && break
+  sleep 1
+done
+check "IMU source = simulated (status ${ST:-none})" "$([ "$((${ST:-0} & 17))" = "17" ] && echo 1 || echo 0)" "bits PRESENT|SIMULATED"
+
 say "-- starting BMS responder + replay"
 $A shell "nohup moto_bms_sim vcan0 >/dev/null 2>&1 &"
 $A shell "nohup moto_can_replay vcan0 -f /data/local/tmp/e2e_ride.log >/dev/null 2>&1 &"
@@ -74,6 +89,19 @@ check "controller temp warming (got $CT)" "$(awk -v x="${CT:-0}" 'BEGIN{print (x
 check "motor temp warming (got $MT)" "$(awk -v x="${MT:-0}" 'BEGIN{print (x>25.5 && x<65)?1:0}')" "0x10261023 byte1"
 check "raw gear byte 0x30 (got $(prop $PROP_RAWGEAR))" "$([ "$(prop $PROP_RAWGEAR)" = "48" ] && echo 1 || echo 0)" "byte1 verbatim"
 check "no fault yet" "$([ "$(prop $PROP_FAULT)" = "0" ] && echo 1 || echo 0)" "fault window starts at t+65"
+
+say "-- t+31..44s: corners at cruise speed (lean must be read through the centripetal term)"
+imu_sim "lean=30 alt=120"
+at 37
+LEAN=$(prop $PROP_LEAN); LG=$(prop $PROP_LATG); ST=$(prop $PROP_IMUSTATUS)
+check "lean 30 deg right (got ${LEAN:-none})" "$(near ${LEAN:-0} 30 2.5)" "VENDOR_LEAN_DEG mid-corner"
+check "lateral g ~0.58 right (got ${LG:-none})" "$(near ${LG:-0} 0.577 0.08)" "VENDOR_LAT_G = tan(30)"
+check "IMU status valid+calibrated (got ${ST:-none})" "$([ "$((${ST:-0} & 61))" = "61" ] && echo 1 || echo 0)" "PRESENT|LEVEL|FORWARD|SIM|VALID"
+imu_sim "lean=-20 alt=120"
+at 43
+LEAN=$(prop $PROP_LEAN)
+check "lean 20 deg left (got ${LEAN:-none})" "$(near ${LEAN:-0} -20 2.5)" "sign: + = right"
+imu_sim "lean=0 alt=120"
 
 say "-- fault window (65-115 s):"
 at 90
@@ -116,6 +144,23 @@ check "ride summary published at key-off (seq ${RS:-none})" "$([ "${RS:-0}" -ge 
 RM=$(prop 559939664)
 check "ride distance ~1.77km (got ${RM:-0}m)" "$(near ${RM:-0} 1770 60)" "VENDOR_RIDE_DISTANCE_M"
 check "speed 0 (got $V)" "$(near ${V:-1} 0 0.01)" "last frame was standstill"
+ML=$(prop $PROP_MAXLEAN_L); MR=$(prop $PROP_MAXLEAN_R)
+check "ride max lean R ~30 (got ${MR:-none})" "$(near ${MR:-0} 30 2.5)" "VENDOR_RIDE_MAX_LEAN_R with the summary"
+check "ride max lean L ~20 (got ${ML:-none})" "$(near ${ML:-0} 20 2.5)" "VENDOR_RIDE_MAX_LEAN_L with the summary"
+
+say "-- Workshop Level command (bike still) then clear, then unplug the simulated sensor"
+$A shell "cmd car_service set-property-value 0x21400068 0 1" >/dev/null 2>&1
+sleep 3
+ST=$(prop $PROP_IMUSTATUS)
+check "level captured (status ${ST:-none})" "$([ "$((${ST:-0} & 4))" = "4" ] && [ "$((${ST:-0} & 64))" = "0" ] && echo 1 || echo 0)" "LEVEL_SET without LEVEL_FAILED"
+$A shell "cmd car_service set-property-value 0x21400068 0 0" >/dev/null 2>&1
+sleep 2
+ST=$(prop $PROP_IMUSTATUS)
+check "calibration cleared (status ${ST:-none})" "$([ "$((${ST:-0} & 12))" = "0" ] && echo 1 || echo 0)" "neither LEVEL_SET nor FORWARD_SET"
+$A shell "rm -f $IMU_SIM"
+sleep 3
+ST=$(prop $PROP_IMUSTATUS)
+check "sensor gone -> status 0 (got ${ST:-none})" "$([ "${ST:-1}" = "0" ] && echo 1 || echo 0)" "source loss must clear PRESENT"
 
 say "-- ride bookkeeping"
 ODO1=$(prop $PROP_ODO)

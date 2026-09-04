@@ -62,6 +62,9 @@ MotorcycleVehicleHardware::MotorcycleVehicleHardware(std::string canInterfaceOve
     // Link watchdog: drops the link bits when frames stop, so the UI can show
     // "no data" instead of freezing at the last values.
     mLinkWatchdogThread = std::thread(&MotorcycleVehicleHardware::linkWatchdogThread, this);
+    // Inertial sensing: probes the I2C sensors (or the simulator file) and
+    // keeps probing, so a module plugged in later just starts working.
+    mImuThread = std::thread(&MotorcycleVehicleHardware::imuThread, this);
     LOG(INFO) << "BMS polling thread started";
 }
 
@@ -88,6 +91,9 @@ MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
     }
     if (mLinkWatchdogThread.joinable()) {
         mLinkWatchdogThread.join();
+    }
+    if (mImuThread.joinable()) {
+        mImuThread.join();
     }
     closeCapture();
     if (mCanSocket >= 0) {
@@ -524,6 +530,37 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addFloatVendorProp(VENDOR_RIDE_WH_PER_KM, -1000.0f, 1000.0f, 0.0f);
     addFloatVendorProp(VENDOR_RIDE_MAX_SPEED_MPS, 0.0f, 100.0f, 0.0f);
     addIntVendorProp(VENDOR_RIDE_SEQ, 0);
+    addFloatVendorProp(VENDOR_RIDE_MAX_LEAN_L, 0.0f, 90.0f, 0.0f);
+    addFloatVendorProp(VENDOR_RIDE_MAX_LEAN_R, 0.0f, 90.0f, 0.0f);
+
+    // Inertial sensing (imu/): lean at 10 Hz, the rest slower.
+    addFloatVendorProp(VENDOR_LEAN_DEG, -90.0f, 90.0f, 0.0f);
+    addFloatVendorProp(VENDOR_PITCH_DEG, -90.0f, 90.0f, 0.0f);
+    addFloatVendorProp(VENDOR_LAT_G, -3.0f, 3.0f, 0.0f);
+    addFloatVendorProp(VENDOR_LONG_G, -3.0f, 3.0f, 0.0f);
+    addFloatVendorProp(VENDOR_BARO_HPA, 300.0f, 1200.0f, 0.0f);
+    addFloatVendorProp(VENDOR_ALTITUDE_M, -1000.0f, 10000.0f, 0.0f);
+    addFloatVendorProp(VENDOR_IMU_TEMP_C, -50.0f, 150.0f, 0.0f);
+    addIntVendorProp(VENDOR_IMU_STATUS, 0);
+    {
+        // Raw sensor axes for the Workshop mounting check: float[6].
+        VehiclePropConfig config;
+        config.prop = VENDOR_IMU_RAW;
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::CONTINUOUS;
+        config.minSampleRate = 0.5f;
+        config.maxSampleRate = 10.0f;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+        VehiclePropValue value;
+        value.prop = VENDOR_IMU_RAW;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.floatValues.assign(6, 0.0f);
+        mCurrentValues[VENDOR_IMU_RAW] = value;
+    }
     addFloatVendorProp(VENDOR_PACK_DOD, 0.0f, 100.0f, 0.0f);             // Depth of Discharge %
     addFloatVendorProp(VENDOR_PACK_AMPHOURS, 0.0f, 500.0f, 100.0f);      // Capacity Ah
     addFloatVendorProp(VENDOR_PACK_RESISTANCE, 0.0f, 1000.0f, 0.0f);     // Resistance mOhm
@@ -670,6 +707,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     // instead of 0=P..3=D ("display needs +1"). Settable from Workshop
     // settings on the fly so a first-ride discrepancy needs no rebuild.
     addConfigProp(VENDOR_CFG_GEAR_BASE, false, 0.0f, mGearBase.load());
+    addConfigProp(VENDOR_CFG_IMU_LEVEL, false, 0.0f, 0);
 
     // Standard display-unit properties. configArray lists the supported
     // VehicleUnit values, as the property docs require.
@@ -908,6 +946,7 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
         updateChargingState(rpm, bmsFresh ? mBmsCurrentA : current, timestamp);
     }
     float speedMps = calculateSpeedFromRpm(rpm);
+    mLastSpeedMps.store(speedMps, std::memory_order_relaxed);  // for the lean estimator
     accumulateDistance(speedMps, timestamp);
     accumulateEnergy(voltage, current, speedMps, timestamp);
     publishDistance(timestamp);
@@ -1603,6 +1642,7 @@ void MotorcycleVehicleHardware::trackRide(float speedMps, int64_t timestamp) {
         mRideMovingNs = 0;
         mRideEnergyWh = 0.0;
         mRideMaxSpeedMps = 0.0f;
+        mRideMaxLeanL = mRideMaxLeanR = 0.0f;
         mRideLastTrackNs = timestamp;
         mRideLastMoveNs = timestamp;
         LOG(INFO) << "Ride started at odo " << mOdometerMeters << " m";
@@ -1623,7 +1663,7 @@ void MotorcycleVehicleHardware::addRideEnergy(double wh) {
 }
 
 void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
-    float meters, seconds, whPerKm, maxMps;
+    float meters, seconds, whPerKm, maxMps, maxLeanL, maxLeanR;
     int32_t seq;
     {
         std::lock_guard<std::mutex> lock(mRideMutex);
@@ -1640,12 +1680,16 @@ void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
         seconds = static_cast<float>(mRideMovingNs / 1e9);
         whPerKm = static_cast<float>(mRideEnergyWh / (distance / 1000.0));
         maxMps = mRideMaxSpeedMps;
+        maxLeanL = mRideMaxLeanL;
+        maxLeanR = mRideMaxLeanR;
         seq = ++mRideSeq;
     }
     LOG(INFO) << "Ride #" << seq << " ended (" << (linkDead ? "key off" : "parked") << "): "
               << meters << " m, " << seconds << " s moving, " << whPerKm << " Wh/km, max "
-              << maxMps << " m/s";
-    publishRideSummary(meters, seconds, whPerKm, maxMps, seq, nowNs);
+              << maxMps << " m/s, lean " << maxLeanL << "L/" << maxLeanR << "R";
+    publishRideSummary(meters, seconds, whPerKm, maxMps, maxLeanL, maxLeanR, seq, nowNs);
+    persistConfig("persist.vendor.motodash.ride.maxleanl", std::to_string(maxLeanL));
+    persistConfig("persist.vendor.motodash.ride.maxleanr", std::to_string(maxLeanR));
     persistConfig("persist.vendor.motodash.ride.meters", std::to_string(meters));
     persistConfig("persist.vendor.motodash.ride.seconds", std::to_string(seconds));
     persistConfig("persist.vendor.motodash.ride.whperkm", std::to_string(whPerKm));
@@ -1654,7 +1698,8 @@ void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
 }
 
 void MotorcycleVehicleHardware::publishRideSummary(float meters, float seconds, float whPerKm,
-                                                   float maxMps, int32_t seq, int64_t timestamp) {
+                                                   float maxMps, float maxLeanL, float maxLeanR,
+                                                   int32_t seq, int64_t timestamp) {
     std::lock_guard<std::mutex> lock(mValuesMutex);
     auto setF = [&](int32_t prop, float v) {
         auto& value = mCurrentValues[prop];
@@ -1666,6 +1711,8 @@ void MotorcycleVehicleHardware::publishRideSummary(float meters, float seconds, 
     setF(VENDOR_RIDE_DURATION_S, seconds);
     setF(VENDOR_RIDE_WH_PER_KM, whPerKm);
     setF(VENDOR_RIDE_MAX_SPEED_MPS, maxMps);
+    setF(VENDOR_RIDE_MAX_LEAN_L, maxLeanL);
+    setF(VENDOR_RIDE_MAX_LEAN_R, maxLeanR);
     auto& s = mCurrentValues[VENDOR_RIDE_SEQ];
     s.value.int32Values[0] = seq;
     s.timestamp = timestamp;
@@ -2016,6 +2063,13 @@ StatusCode MotorcycleVehicleHardware::applyConfigValue(const VehiclePropValue& v
             LOG(INFO) << "Gear base set to " << v << " (raw " << v << " = P)";
             break;
         }
+        case VENDOR_CFG_IMU_LEVEL: {
+            int32_t v;
+            if (!intArg(0, 1, &v)) return StatusCode::INVALID_ARG;
+            mLevelRequest = v;  // serviced by the imu thread
+            LOG(INFO) << (v ? "IMU level capture requested" : "IMU calibration clear requested");
+            break;
+        }
         case VENDOR_CFG_CAN_CAPTURE: {
             int32_t v;
             if (!intArg(0, 1, &v)) return StatusCode::INVALID_ARG;
@@ -2268,11 +2322,15 @@ void MotorcycleVehicleHardware::loadConfig() {
         property_get("persist.vendor.motodash.ride.seconds", s, "0");
         property_get("persist.vendor.motodash.ride.whperkm", w, "0");
         property_get("persist.vendor.motodash.ride.maxmps", x, "0");
+        char ll[PROPERTY_VALUE_MAX], lr[PROPERTY_VALUE_MAX];
+        property_get("persist.vendor.motodash.ride.maxleanl", ll, "0");
+        property_get("persist.vendor.motodash.ride.maxleanr", lr, "0");
         {
             std::lock_guard<std::mutex> lock(mRideMutex);
             mRideSeq = seq;
         }
-        publishRideSummary(atof(m), atof(s), atof(w), atof(x), seq, elapsedRealtimeNano());
+        publishRideSummary(atof(m), atof(s), atof(w), atof(x), atof(ll), atof(lr), seq,
+                           elapsedRealtimeNano());
         LOG(INFO) << "Restored last ride summary #" << seq;
     }
     if (property_get("persist.vendor.motodash.whperkm", propValue, "") > 0) {
@@ -2347,6 +2405,18 @@ void MotorcycleVehicleHardware::loadConfig() {
         LOG(WARNING) << "GPIO debug source ENABLED - indicators driven by "
                         "vendor.motodash.debug.* properties, not real GPIO";
     }
+
+    // Inertial sensing: bus/address overrides and the persisted calibration.
+    if (property_get("persist.vendor.motodash.imu.i2c", propValue, "") > 0) {
+        mImuI2cPath = propValue;
+    }
+    if (property_get("persist.vendor.motodash.imu.addr", propValue, "") > 0) {
+        mImuAddr = static_cast<int>(strtol(propValue, nullptr, 0));
+    }
+    if (property_get("persist.vendor.motodash.imu.baro_addr", propValue, "") > 0) {
+        mBaroAddr = static_cast<int>(strtol(propValue, nullptr, 0));
+    }
+    loadImuCalibration();
 
     LOG(INFO) << "GPIO config loaded: left=" << mGpioLeftTurnPin 
               << " right=" << mGpioRightTurnPin 
@@ -2555,6 +2625,244 @@ void MotorcycleVehicleHardware::updateHighBeamState(bool on) {
         LOG(INFO) << "Notifying HIGH_BEAM_LIGHTS_STATE change: " << state;
         notifyPropertyChange(static_cast<int32_t>(VehicleProperty::HIGH_BEAM_LIGHTS_STATE), value);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Inertial sensing (lean / pitch / g / altitude)
+// ---------------------------------------------------------------------------
+namespace {
+constexpr int64_t kImuPeriodMs = 10;                    // 100 Hz
+constexpr int64_t kLeanPublishNs = 100LL * 1000000LL;   // 10 Hz
+constexpr int64_t kRawPublishNs = 200LL * 1000000LL;    // 5 Hz (Workshop rows)
+constexpr int64_t kBaroPeriodNs = 500LL * 1000000LL;    // 2 Hz
+constexpr int64_t kImuProbeNs = 5LL * 1000000000LL;
+constexpr float kLeanTrackMinSpeedMps = 2.0f;           // side-stand lean is not a ride statistic
+
+bool parseVec3(const char* text, imu::Vec3* out) {
+    float x, y, z;
+    if (sscanf(text, "%f,%f,%f", &x, &y, &z) != 3) return false;
+    *out = imu::Vec3(x, y, z);
+    return out->norm() > 0.5f;
+}
+
+std::string vec3ToString(const imu::Vec3& v) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.5f,%.5f,%.5f", v.x, v.y, v.z);
+    return buf;
+}
+}  // namespace
+
+void MotorcycleVehicleHardware::loadImuCalibration() {
+    char propValue[PROPERTY_VALUE_MAX];
+    imu::Mounting m;
+    imu::Vec3 v;
+    if (property_get("persist.vendor.motodash.imu.up", propValue, "") > 0 && parseVec3(propValue, &v)) {
+        m.setUp(v);
+    }
+    if (m.hasUp && property_get("persist.vendor.motodash.imu.fwd", propValue, "") > 0 &&
+        parseVec3(propValue, &v)) {
+        m.setForward(v);
+    }
+    mLean.setMounting(m);
+    LOG(INFO) << "IMU calibration: up " << (m.hasUp ? "set" : "unset") << ", forward "
+              << (m.hasForward ? "set" : "unset");
+}
+
+void MotorcycleVehicleHardware::persistImuCalibration() {
+    const imu::Mounting& m = mLean.mounting();
+    persistConfig("persist.vendor.motodash.imu.up", m.hasUp ? vec3ToString(m.up) : "");
+    persistConfig("persist.vendor.motodash.imu.fwd", m.hasForward ? vec3ToString(m.forward) : "");
+}
+
+std::unique_ptr<imu::ImuSource> MotorcycleVehicleHardware::openImuSource() {
+    // The scenario file wins when present (emulator, e2e test, bench demo).
+    if (access(mImuSimPath.c_str(), R_OK) == 0) {
+        LOG(WARNING) << "IMU: SIMULATED from " << mImuSimPath;
+        if (!mLean.mounting().complete()) {
+            // The synthetic sensor sits at identity; a real Level/forward
+            // calibration (persisted) still takes precedence when present.
+            mLean.setMounting(imu::Mounting::identity());
+        }
+        return std::make_unique<imu::SimImuSource>(
+                mImuSimPath, [this] { return mLastSpeedMps.load(std::memory_order_relaxed); });
+    }
+    auto src = std::make_unique<imu::I2cImuSource>(mImuI2cPath, static_cast<uint8_t>(mImuAddr),
+                                                   static_cast<uint8_t>(mBaroAddr));
+    if (!src->open()) return nullptr;
+    char id[16];
+    snprintf(id, sizeof(id), "0x%02X", src->imuWhoAmI());
+    LOG(INFO) << "IMU: ISM330DHCX family (WHO_AM_I " << id << ") on " << mImuI2cPath
+              << ", barometer " << (src->hasBaro() ? "present" : "absent");
+    return src;
+}
+
+void MotorcycleVehicleHardware::imuThread() {
+    std::unique_ptr<imu::ImuSource> source;
+    int64_t nextProbeNs = 0;
+    bool loggedAbsent = false;
+    while (mRunning) {
+        int64_t now = elapsedRealtimeNano();
+        if (!source) {
+            if (now >= nextProbeNs) {
+                nextProbeNs = now + kImuProbeNs;
+                source = openImuSource();
+                if (source) {
+                    loggedAbsent = false;
+                    mLastImuSampleNs = 0;
+                    mLean.reset();
+                    mImuLevelFailed = false;
+                    mImuSourceBits = IMU_STATUS_PRESENT |
+                                     (source->hasBaro() ? IMU_STATUS_BARO : 0) |
+                                     (source->isSimulated() ? IMU_STATUS_SIMULATED : 0);
+                    publishImuStatus(now);
+                } else if (!loggedAbsent) {
+                    LOG(INFO) << "IMU: nothing on " << mImuI2cPath << " and no " << mImuSimPath
+                              << " - lean disabled, probing every 5 s";
+                    loggedAbsent = true;
+                }
+            }
+            if (!sleepUnlessStopping(1000)) break;
+            continue;
+        }
+        imu::ImuSample s;
+        float tempC = 0.0f;
+        if (!source->read(&s, &tempC)) {
+            LOG(WARNING) << "IMU: source '" << source->name() << "' lost";
+            source.reset();
+            mImuSourceBits = 0;
+            mImuLevelFailed = false;
+            publishImuStatus(now);
+            nextProbeNs = now + 2LL * 1000000000LL;
+            continue;
+        }
+        processImuSample(s, tempC, now);
+        if (source->hasBaro() && now - mLastBaroReadNs >= kBaroPeriodNs) {
+            mLastBaroReadNs = now;
+            float pa = 0.0f, t = 0.0f;
+            if (source->readBaro(&pa, &t)) {
+                std::lock_guard<std::mutex> lock(mValuesMutex);
+                auto setF = [&](int32_t prop, float v) {
+                    auto& value = mCurrentValues[prop];
+                    value.value.floatValues[0] = v;
+                    value.timestamp = now;
+                    notifyPropertyChange(prop, value);
+                };
+                setF(VENDOR_BARO_HPA, pa / 100.0f);
+                setF(VENDOR_ALTITUDE_M, imu::Bmp280::altitudeM(pa));
+            }
+        }
+        if (!sleepUnlessStopping(kImuPeriodMs)) break;
+    }
+}
+
+void MotorcycleVehicleHardware::processImuSample(const imu::ImuSample& s, float tempC,
+                                                 int64_t nowNs) {
+    int64_t lastFrame = mLastControllerFrameNs.load(std::memory_order_relaxed);
+    bool speedValid = lastFrame != 0 && (nowNs - lastFrame) < 1000000000LL;
+    float speed = mLastSpeedMps.load(std::memory_order_relaxed);
+
+    // Level / clear commands from the Workshop.
+    int req = mLevelRequest.exchange(-1);
+    if (req == 1) {
+        mImuLevelFailed = false;
+        if (speedValid && speed > 0.5f) {
+            mImuLevelFailed = true;  // the capture itself would also catch it
+            LOG(WARNING) << "IMU level rejected: bike is moving";
+        } else {
+            mLevelCapture.reset();
+            mLevelCapturing = true;
+        }
+    } else if (req == 0) {
+        mLean.setMounting(imu::Mounting{});
+        persistImuCalibration();
+        mLevelCapturing = false;
+        LOG(INFO) << "IMU calibration cleared";
+    }
+    if (mLevelCapturing) {
+        mLevelCapture.add(s);
+        if (mLevelCapture.done()) {
+            mLevelCapturing = false;
+            imu::Vec3 up;
+            const char* why = "";
+            if (mLevelCapture.result(&up, &why)) {
+                imu::Mounting m;  // a fresh level always restarts forward learning
+                m.setUp(up);
+                mLean.setMounting(m);
+                persistImuCalibration();
+                LOG(INFO) << "IMU levelled: up = " << vec3ToString(up);
+            } else {
+                mImuLevelFailed = true;
+                LOG(WARNING) << "IMU level rejected: " << why;
+            }
+        }
+    }
+
+    float dt = mLastImuSampleNs == 0 ? 0.0f : static_cast<float>(nowNs - mLastImuSampleNs) / 1e9f;
+    mLastImuSampleNs = nowNs;
+    if (dt > 0.0f) mLean.update(s, speed, speedValid, dt);
+    if (mLean.takeForwardLearned()) {
+        persistImuCalibration();
+        LOG(INFO) << "IMU forward axis learned: " << vec3ToString(mLean.mounting().forward);
+    }
+
+    const auto& st = mLean.state();
+    publishImuStatus(nowNs);
+    if (st.valid && speedValid) trackRideLean(st.rollDeg, speed);
+
+    if (st.valid && nowNs - mLastLeanPublishNs >= kLeanPublishNs) {
+        mLastLeanPublishNs = nowNs;
+        std::lock_guard<std::mutex> lock(mValuesMutex);
+        auto setF = [&](int32_t prop, float v) {
+            auto& value = mCurrentValues[prop];
+            value.value.floatValues[0] = v;
+            value.timestamp = nowNs;
+            notifyPropertyChange(prop, value);
+        };
+        setF(VENDOR_LEAN_DEG, st.rollDeg);
+        setF(VENDOR_PITCH_DEG, st.pitchDeg);
+        setF(VENDOR_LAT_G, st.latG);
+        setF(VENDOR_LONG_G, st.longG);
+    }
+    if (nowNs - mLastRawPublishNs >= kRawPublishNs) {
+        mLastRawPublishNs = nowNs;
+        std::lock_guard<std::mutex> lock(mValuesMutex);
+        auto& raw = mCurrentValues[VENDOR_IMU_RAW];
+        raw.value.floatValues = {s.accelG.x, s.accelG.y, s.accelG.z,
+                                 s.gyroDps.x, s.gyroDps.y, s.gyroDps.z};
+        raw.timestamp = nowNs;
+        notifyPropertyChange(VENDOR_IMU_RAW, raw);
+        auto& t = mCurrentValues[VENDOR_IMU_TEMP_C];
+        t.value.floatValues[0] = tempC;
+        t.timestamp = nowNs;
+        notifyPropertyChange(VENDOR_IMU_TEMP_C, t);
+    }
+}
+
+void MotorcycleVehicleHardware::publishImuStatus(int64_t nowNs) {
+    // Assembled fresh every time and published only on change.
+    const auto& m = mLean.mounting();
+    int32_t status = mImuSourceBits;
+    if (mImuSourceBits != 0) {
+        if (mImuLevelFailed) status |= IMU_STATUS_LEVEL_FAILED;
+        if (m.hasUp) status |= IMU_STATUS_LEVEL_SET;
+        if (m.hasForward) status |= IMU_STATUS_FORWARD_SET;
+        if (mLean.state().valid) status |= IMU_STATUS_VALID;
+    }
+    if (status == mImuStatus) return;
+    mImuStatus = status;
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto& v = mCurrentValues[VENDOR_IMU_STATUS];
+    v.value.int32Values[0] = mImuStatus;
+    v.timestamp = nowNs;
+    notifyPropertyChange(VENDOR_IMU_STATUS, v);
+}
+
+void MotorcycleVehicleHardware::trackRideLean(float rollDeg, float speedMps) {
+    if (speedMps < kLeanTrackMinSpeedMps) return;
+    std::lock_guard<std::mutex> lock(mRideMutex);
+    if (!mRideActive) return;
+    if (rollDeg > mRideMaxLeanR) mRideMaxLeanR = rollDeg;
+    if (-rollDeg > mRideMaxLeanL) mRideMaxLeanL = -rollDeg;
 }
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle

@@ -239,11 +239,28 @@ sealed 2026-09-04 13:18):
     USB u-blox puck works unchanged; a Grove/I2C GPS would need a new HAL path
     and puts the antenna inside the enclosure. Upgrade path if wanted: a USB
     u-blox M8N/M9N puck at 10 Hz with an active antenna.
-    Plan: VHAL sensor thread (~100 Hz from IIO), complementary filter for
-    roll/pitch (pure, gtested), Workshop "Level" to zero mounting offsets,
-    vendor props roll/pitch/g, cluster lean arc, max lean L/R in the ride
-    summary; then crash/drop detection, braking g stats, grade-aware Wh/km
-    from the barometer. Mount the module rigidly inside the dash enclosure.
+    SOFTWARE SHIPPED 2026-09-04 (parts on order; hardware verification
+    pending - see TESTING.md "Lean sensor"): the HAL drives both chips itself
+    over /dev/i2c-1 (`vehicle_hal/imu/`: I2C_RDWR transport, ISM330DHCX +
+    BMP280 register drivers, 100 Hz) because the kernel's lsm6dsx driver has
+    no usable streaming path here (no IIO trigger, no INT line on Qwiic; its
+    one-shot sysfs reads cap at ~10 Hz). Vehicle-aware LeanEstimator: CAN
+    speed x yaw rate removed as centripetal, dv/dt as longitudinal, roll
+    solved as a fixed point (converges from upright into an established
+    corner), gyro-integrated, accel-anchored; gyro bias learned at
+    standstill; mounting = Level (up axis, Workshop button, rejected if the
+    bike moves) + forward axis learned from straight-line acceleration or
+    braking; both persisted. Props VENDOR_LEAN_DEG/PITCH/LAT_G/LONG_G/
+    BARO_HPA/ALTITUDE_M/IMU_TEMP/IMU_STATUS/IMU_RAW, CFG_IMU_LEVEL command,
+    RIDE_MAX_LEAN_L/R in the ride summary (speed-gated). Cluster: lean arc
+    with ride max marks (hidden until the sensor is present). Cockpit LAST
+    RIDE shows max lean. Simulator: scenario file drives a synthetic IMU at
+    the live CAN speed (e2e 37 checks). 22 new host tests.
+    Still to do once the sensor is on the bike: verify I2C bring-up (ueventd
+    perms, sepolicy, addresses), tune trust band / time constants on a real
+    ride capture (log IMU_RAW alongside CAN), then crash/drop detection,
+    braking-g ride stats, grade-aware Wh/km from the barometer. A raw IMU
+    capture (like the CAN capture) is the natural next tool.
 - **Speed limit on the cluster - NOT feasible via OsmAnd AIDL** (checked
   2026-09-04: neither the V1 nor V2 API exposes the current road's speed
   limit; only GPX max speed). Options: an in-house OSM lookup from offline

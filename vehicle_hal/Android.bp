@@ -18,7 +18,14 @@ cc_library_static {
     ],
     local_include_dirs: ["."],
     export_include_dirs: ["."],
-    srcs: ["MotorcycleVehicleHardware.cpp"],
+    srcs: [
+        "MotorcycleVehicleHardware.cpp",
+        "imu/I2cBus.cpp",
+        "imu/ImuSource.cpp",
+        "imu/LeanEstimator.cpp",
+        "imu/Sensors.cpp",
+        "imu/SyntheticImu.cpp",
+    ],
     header_libs: [
         "IVehicleHardware",
     ],
@@ -63,7 +70,10 @@ cc_test {
     host_supported: true,
     device_supported: false,
     defaults: ["VehicleHalDefaults"],
-    srcs: ["tests/MotorcycleVehicleHardwareTest.cpp"],
+    srcs: [
+        "tests/MotorcycleVehicleHardwareTest.cpp",
+        "tests/ImuTest.cpp",
+    ],
     static_libs: [
         "MotorcycleVehicleHardware",
         "VehicleHalUtils",

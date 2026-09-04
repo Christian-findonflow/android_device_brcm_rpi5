@@ -31,7 +31,11 @@ dtparam=drm_fb0_rp1_dsi1=on
 dtoverlay=cma,cma-320
 
 # I2C
-#dtparam=i2c_arm=on
+# I2C bus 1 = the Grove ports on the Seeed CAN-FD HAT v2: ISM330DHCX lean
+# sensor (0x6a) + BMP280 barometer (0x77), driven by the vehicle HAL over
+# /dev/i2c-1 (no kernel sensor drivers involved).
+dtparam=i2c_arm=on
+dtparam=i2c_arm_baudrate=400000
 
 # I2S
 #dtparam=i2s=on

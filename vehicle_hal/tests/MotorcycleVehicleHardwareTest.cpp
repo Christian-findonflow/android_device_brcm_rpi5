@@ -9,6 +9,7 @@
  */
 
 #include "MotorcycleVehicleHardware.h"
+#include "imu/SyntheticImu.h"
 
 #include <gtest/gtest.h>
 
@@ -59,6 +60,16 @@ class MotorcycleVehicleHardwareTestPeer {
     }
     void setChargingDwell(int64_t ns) { mHw->mChargingDwellNs = ns; }
     void endRideIfDue(int64_t nowNs, bool linkDead) { mHw->endRideIfDue(nowNs, linkDead); }
+    // IMU path without the thread: the caller is the clock and the sensor.
+    void processImuSample(const imu::ImuSample& s, float tempC, int64_t ts) {
+        mHw->processImuSample(s, tempC, ts);
+    }
+    void setImuMounting(const imu::Mounting& m) { mHw->mLean.setMounting(m); }
+    void setImuPresent() { mHw->mImuSourceBits = IMU_STATUS_PRESENT; }
+    void setLiveSpeed(float mps, int64_t ts) {
+        mHw->mLastSpeedMps = mps;
+        mHw->mLastControllerFrameNs = ts;
+    }
     // Wire a socketpair in place of the CAN socket so tests can read frames
     // the HAL transmits (display reports).
     void setCanSocket(int fd) { mHw->mCanSocket = fd; }
@@ -127,6 +138,8 @@ class MotorcycleVehicleHardwareTest : public ::testing::Test {
         property_set("persist.vendor.motodash.cfg.units_temp", "");
         property_set("persist.vendor.motodash.cfg.can_capture", "");
         property_set("persist.vendor.motodash.cfg.gear_base", "");
+        property_set("persist.vendor.motodash.imu.up", "");
+        property_set("persist.vendor.motodash.imu.fwd", "");
         // Nonexistent interface: the reader thread stays in its retry loop and
         // never interferes; frames are injected through the peer instead.
         mHardware = std::make_unique<MotorcycleVehicleHardware>("vcan-test-none");
@@ -1017,4 +1030,171 @@ TEST_F(MotorcycleVehicleHardwareTest, CaptureWritesCandumpFormat) {
 }
 
 }  // namespace
+// ---------------------------------------------------------------------------
+// Inertial sensing through the HAL (estimator itself: tests/ImuTest.cpp)
+// ---------------------------------------------------------------------------
+
+TEST_F(MotorcycleVehicleHardwareTest, ImuCornerPublishesLeanAndRideMaxLean) {
+    using namespace imu;
+    mPeer->setImuPresent();
+    mPeer->setImuMounting(Mounting::identity());
+    SyntheticImu sim;
+    Scenario sc;
+    sc.speedMps = 15.0f;
+    int64_t t = 1000000000LL;
+    // Ride: 40 s straight, 10 s in a 30 deg right-hander, 10 s straight.
+    for (int i = 0; i < 6000; i++) {
+        t += 10000000LL;  // 100 Hz
+        if (i % 5 == 0) mPeer->accumulateDistance(sc.speedMps, t);  // controller at 20 Hz
+        mPeer->setLiveSpeed(sc.speedMps, t);
+        if (i == 4000) sc.leanDeg = 30.0f;
+        if (i == 5000) sc.leanDeg = 0.0f;
+        mPeer->processImuSample(sim.sample(sc), 30.0f, t);
+        if (i == 4900) {
+            auto lean = lastEvent(VENDOR_LEAN_DEG);
+            ASSERT_TRUE(lean.has_value());
+            EXPECT_NEAR(lean->value.floatValues[0], 30.0f, 1.5f);
+            auto lat = lastEvent(VENDOR_LAT_G);
+            ASSERT_TRUE(lat.has_value());
+            EXPECT_GT(lat->value.floatValues[0], 0.5f);
+        }
+    }
+    auto status = lastEvent(VENDOR_IMU_STATUS);
+    ASSERT_TRUE(status.has_value());
+    EXPECT_EQ(status->value.int32Values[0] & (IMU_STATUS_PRESENT | IMU_STATUS_LEVEL_SET |
+                                              IMU_STATUS_FORWARD_SET | IMU_STATUS_VALID),
+              IMU_STATUS_PRESENT | IMU_STATUS_LEVEL_SET | IMU_STATUS_FORWARD_SET | IMU_STATUS_VALID);
+    auto raw = lastEvent(VENDOR_IMU_RAW);
+    ASSERT_TRUE(raw.has_value());
+    EXPECT_EQ(raw->value.floatValues.size(), 6u);
+
+    // Key off: the summary carries the deepest lean, right side only.
+    mPeer->endRideIfDue(t + 2000000000LL, true);
+    auto seq = lastEvent(VENDOR_RIDE_SEQ);
+    ASSERT_TRUE(seq.has_value() && seq->value.int32Values[0] > 0);
+    auto maxR = lastEvent(VENDOR_RIDE_MAX_LEAN_R);
+    auto maxL = lastEvent(VENDOR_RIDE_MAX_LEAN_L);
+    ASSERT_TRUE(maxR.has_value() && maxL.has_value());
+    EXPECT_NEAR(maxR->value.floatValues[0], 30.0f, 1.5f);
+    EXPECT_LT(maxL->value.floatValues[0], 1.0f);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, SideStandLeanIsNotARideStatistic) {
+    using namespace imu;
+    mPeer->setImuPresent();
+    mPeer->setImuMounting(Mounting::identity());
+    SyntheticImu sim;
+    int64_t t = 1000000000LL;
+    // Ride 600 m, then park on the stand (12 deg left, speed 0) for 10 s.
+    for (int i = 0; i < 1200; i++) {
+        t += 50000000LL;
+        mPeer->accumulateDistance(10.0f, t);
+    }
+    Scenario stand;
+    stand.leanDeg = -12.0f;
+    for (int i = 0; i < 1000; i++) {
+        t += 10000000LL;
+        mPeer->setLiveSpeed(0.0f, t);
+        mPeer->processImuSample(sim.sample(stand), 30.0f, t);
+    }
+    auto lean = lastEvent(VENDOR_LEAN_DEG);
+    ASSERT_TRUE(lean.has_value());
+    EXPECT_NEAR(lean->value.floatValues[0], -12.0f, 1.0f);  // reported live...
+    mPeer->endRideIfDue(t + 1000000000LL, true);
+    auto maxL = lastEvent(VENDOR_RIDE_MAX_LEAN_L);
+    ASSERT_TRUE(maxL.has_value());
+    EXPECT_LT(maxL->value.floatValues[0], 0.5f);            // ...but not a ride statistic
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, ImuLevelCommandCapturesUpAndPersists) {
+    using namespace imu;
+    mPeer->setImuPresent();
+    Mounting truth;
+    truth.setUp(Vec3(0.2f, -0.3f, 0.93f));
+    truth.setForward(Vec3(0.9f, 0.4f, 0.0f));
+    SyntheticImu sim(truth);
+    Scenario still;
+    int64_t t = 1000000000LL;
+
+    // Uncalibrated: status says so, nothing valid.
+    mPeer->processImuSample(sim.sample(still), 30.0f, t);
+    auto status = lastEvent(VENDOR_IMU_STATUS);
+    ASSERT_TRUE(status.has_value());
+    EXPECT_EQ(status->value.int32Values[0] & IMU_STATUS_LEVEL_SET, 0);
+
+    // Level: 1 s of upright stillness after the Workshop button.
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_IMU_LEVEL, 1)), StatusCode::OK);
+    for (int i = 0; i < 120; i++) {
+        t += 10000000LL;
+        mPeer->processImuSample(sim.sample(still), 30.0f, t);
+    }
+    status = lastEvent(VENDOR_IMU_STATUS);
+    ASSERT_TRUE(status.has_value());
+    EXPECT_NE(status->value.int32Values[0] & IMU_STATUS_LEVEL_SET, 0);
+    EXPECT_EQ(status->value.int32Values[0] & IMU_STATUS_FORWARD_SET, 0);
+    char up[PROPERTY_VALUE_MAX];
+    ASSERT_GT(property_get("persist.vendor.motodash.imu.up", up, ""), 0);
+    float ux, uy, uz;
+    ASSERT_EQ(sscanf(up, "%f,%f,%f", &ux, &uy, &uz), 3);
+    EXPECT_GT(Vec3(ux, uy, uz).dot(truth.up), 0.9999f);
+
+    // Forward learns itself from a straight pull-away and is persisted too.
+    Scenario go;
+    go.longAccelMps2 = 2.0f;
+    for (int i = 0; i < 900; i++) {
+        t += 10000000LL;
+        go.speedMps = 2.0f * (i + 1) * 0.01f;
+        mPeer->setLiveSpeed(go.speedMps, t);
+        mPeer->processImuSample(sim.sample(go), 30.0f, t);
+    }
+    status = lastEvent(VENDOR_IMU_STATUS);
+    ASSERT_TRUE(status.has_value());
+    EXPECT_NE(status->value.int32Values[0] & IMU_STATUS_FORWARD_SET, 0);
+    char fwd[PROPERTY_VALUE_MAX];
+    EXPECT_GT(property_get("persist.vendor.motodash.imu.fwd", fwd, ""), 0);
+
+    // Clear wipes both.
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_IMU_LEVEL, 0)), StatusCode::OK);
+    t += 10000000LL;
+    mPeer->processImuSample(sim.sample(still), 30.0f, t);
+    status = lastEvent(VENDOR_IMU_STATUS);
+    ASSERT_TRUE(status.has_value());
+    EXPECT_EQ(status->value.int32Values[0] & (IMU_STATUS_LEVEL_SET | IMU_STATUS_FORWARD_SET), 0);
+    EXPECT_EQ(property_get("persist.vendor.motodash.imu.up", up, ""), 0);
+}
+
+TEST_F(MotorcycleVehicleHardwareTest, ImuLevelRejectedWhileMoving) {
+    using namespace imu;
+    mPeer->setImuPresent();
+    SyntheticImu sim;
+    Scenario turning;
+    int64_t t = 1000000000LL;
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_IMU_LEVEL, 1)), StatusCode::OK);
+    for (int i = 0; i < 120; i++) {
+        t += 10000000LL;
+        ImuSample s = sim.sample(turning);
+        s.gyroDps.z = 25.0f;  // someone is wheeling the bike round
+        mPeer->processImuSample(s, 30.0f, t);
+    }
+    auto status = lastEvent(VENDOR_IMU_STATUS);
+    ASSERT_TRUE(status.has_value());
+    EXPECT_NE(status->value.int32Values[0] & IMU_STATUS_LEVEL_FAILED, 0);
+    EXPECT_EQ(status->value.int32Values[0] & IMU_STATUS_LEVEL_SET, 0);
+
+    // Riding along: refused outright, even with a perfectly quiet sensor
+    // (the flag simply stays up; the status does not need to re-fire).
+    Scenario straight;
+    straight.speedMps = 10.0f;
+    EXPECT_EQ(mPeer->applyConfigValue(makeIntValue(VENDOR_CFG_IMU_LEVEL, 1)), StatusCode::OK);
+    for (int i = 0; i < 120; i++) {
+        t += 10000000LL;
+        mPeer->setLiveSpeed(10.0f, t);
+        mPeer->processImuSample(sim.sample(straight), 30.0f, t);
+    }
+    status = lastEvent(VENDOR_IMU_STATUS);
+    ASSERT_TRUE(status.has_value());
+    EXPECT_NE(status->value.int32Values[0] & IMU_STATUS_LEVEL_FAILED, 0);
+    EXPECT_EQ(status->value.int32Values[0] & IMU_STATUS_LEVEL_SET, 0);
+}
+
 }  // namespace android::hardware::automotive::vehicle::motorcycle

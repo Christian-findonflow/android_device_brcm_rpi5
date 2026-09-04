@@ -27,3 +27,6 @@
 /dev/ttyACM*                                                                 0660   gps        gps
 /dev/ttyUSB*                                                                 0660   gps        gps
 /dev/gnss*                                                                   0660   gps        gps
+
+# I2C bus 1 (Grove ports on the CAN HAT): lean sensor + barometer, vehicle HAL
+/dev/i2c-1                                                                   0660   vehicle_network  system
