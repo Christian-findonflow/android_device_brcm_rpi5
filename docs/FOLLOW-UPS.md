@@ -171,9 +171,14 @@ sealed 2026-09-04 13:18):
     knows ism330dhcx (driver string confirmed in the kernel Image) but the Pi
     i2c-sensor overlay has no param for it, so instantiate at boot from an init
     .rc line: `write /sys/bus/i2c/devices/i2c-1/new_device "ism330dhcx 0x6a"`
-    (0x6b if the address jumper is bridged). Optional Adafruit BMP280 on the
-    same cable: `dtoverlay=i2c-sensor,bmp280` (addr 0x77 on Adafruit boards:
-    `bmp280,addr=0x77`). A custom overlay is also possible with
+    (0x6b if the address jumper is bridged). Barometer: **Adafruit 2651 BMP280 -
+    current revision has two STEMMA QT ports** (Mouser shows the old header-only
+    photo); NOT Adafruit 4633 (LPS22HB - no driver in our kernel, st_pressure
+    unset). `dtoverlay=i2c-sensor,bmp280,addr=0x77` (0x76 with SDO jumper).
+    Cabling: STEMMA QT/Qwiic boards carry two PARALLEL connectors, so daisy-chain:
+    HAT Grove port -> Qwiic-to-Grove cable -> IMU -> Qwiic-Qwiic cable (Adafruit
+    4399 50 mm / 4210 100 mm) -> BMP280. One I2C bus (i2c-1), devices told apart
+    by address (0x6a IMU, 0x77 baro); 3V3 from the Grove port is plenty. A custom overlay is also possible with
     prebuilts/misc/linux-x86/dtc. The device then appears as
     /sys/bus/iio/devices/iio:deviceN with in_accel_*/in_anglvel_* raw+scale.
     The DFRobot Fermion 10-DOF (ADXL345/ITG-3205/HMC5883L) would NOT work
