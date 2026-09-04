@@ -35,6 +35,19 @@ entries below and the git log of the three forks.
   `adb install -r --bypass-low-target-sdk-block` (app targets SDK 23);
   image builds unaffected.
 
+2026-09-03/04 (UX pass + rider features, all simulator-verified, bike image
+sealed 2026-09-04 13:18):
+- Phone button straight to Car Dialer; media button opens Bluetooth Audio
+- Glove-sized bottom bar (88dp targets, 12dp gaps, centred under the panel)
+- Three exclusion sweeps via soong `overrides`: every AAOS demo/test app,
+  Radio, Music, Calendar, Messaging, Gallery, Local Media Player - grid is
+  nine real apps (Clock kept)
+- Weather chip (Open-Meteo), charger search, LAST RIDE summary (HAL
+  VENDOR_RIDE_*), Service log in native Settings, AntennaPod + Breezy Weather
+- Test layers: 41 HAL gtests, 14 launcher logic tests, 27-check e2e ride
+- Build host fixed: RAM was running 5600 MT/s on a 4800-rated 12700K IMC;
+  now 4800 + Intel POR - six clean -j16 image builds, zero corruption events
+
 ## Blocked on Christian (things only you can do)
 
 - **Sport + drive modes 1/2/3 (first ride)**: the gear nibble now has a
