@@ -1319,28 +1319,30 @@ void MotorcycleVehicleHardware::processObd2Response(const uint8_t* data, uint8_t
             }
             break;
         }
+        // Temperatures are plain signed degC, NO -40 offset: confirmed on the
+        // bike 2026-09-05 (0xF028/F029 answered 20/18, identical to the 0x6B1
+        // broadcast's high/low; the heatsink had shown -15 with the offset).
         case BMS_PID_TEMP_HIGH: {
-            // 1 byte, range -40 to 80°C (Orion BMS spec)
             if (dataLen >= 1) {
-                updateBmsProperty(VENDOR_PACK_TEMP_HIGH, static_cast<float>(data[4]) - 40.0f);
+                updateBmsProperty(VENDOR_PACK_TEMP_HIGH, static_cast<float>(static_cast<int8_t>(data[4])));
             }
             break;
         }
         case BMS_PID_TEMP_LOW: {
             if (dataLen >= 1) {
-                updateBmsProperty(VENDOR_PACK_TEMP_LOW, static_cast<float>(data[4]) - 40.0f);
+                updateBmsProperty(VENDOR_PACK_TEMP_LOW, static_cast<float>(static_cast<int8_t>(data[4])));
             }
             break;
         }
         case BMS_PID_TEMP_AVG: {
             if (dataLen >= 1) {
-                updateBmsProperty(VENDOR_PACK_TEMP_AVG, static_cast<float>(data[4]) - 40.0f);
+                updateBmsProperty(VENDOR_PACK_TEMP_AVG, static_cast<float>(static_cast<int8_t>(data[4])));
             }
             break;
         }
         case BMS_PID_HEATSINK_TEMP: {
             if (dataLen >= 1) {
-                updateBmsProperty(VENDOR_HEATSINK_TEMP, static_cast<float>(data[4]) - 40.0f);
+                updateBmsProperty(VENDOR_HEATSINK_TEMP, static_cast<float>(static_cast<int8_t>(data[4])));
             }
             break;
         }

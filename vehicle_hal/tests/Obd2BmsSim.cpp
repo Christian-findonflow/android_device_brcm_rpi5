@@ -45,11 +45,11 @@ constexpr PidValue kPids[] = {
         {0xF012, 1, 80},      // depth of discharge, 40% (0.5%)
         {0xF013, 1, 97},      // SoH %
         {0xF018, 2, 143},     // cycles
-        {0xF028, 1, 66},      // high temp, 26C (-40 offset)
-        {0xF029, 1, 62},      // low temp, 22C
-        {0xF02A, 1, 64},      // avg temp, 24C
+        {0xF028, 1, 26},      // high temp, 26C (plain signed degC)
+        {0xF029, 1, 18},      // low temp, 18C
+        {0xF02A, 1, 22},      // avg temp, 22C
         {0xF02B, 1, 2},       // fan speed
-        {0xF02D, 1, 71},      // heatsink, 31C
+        {0xF02D, 1, 30},      // heatsink, 30C
         {0xF032, 2, 36480},   // low cell, 3.648V (0.0001)
         {0xF033, 2, 36620},   // high cell, 3.662V
         {0xF034, 2, 36550},   // avg cell, 3.655V
