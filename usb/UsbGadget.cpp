@@ -34,8 +34,14 @@ namespace usb {
 namespace gadget {
 
 UsbGadget::UsbGadget() {
+    // init creates the configfs gadget in its "on boot" block; give it up to
+    // 30 s rather than aborting (the abort took system_server down with it).
+    for (int i = 0; i < 300 && access(OS_DESC_PATH, R_OK) != 0; i++) {
+        if (i == 0) ALOGW("configfs setup not done yet, waiting");
+        usleep(100000);
+    }
     if (access(OS_DESC_PATH, R_OK) != 0) {
-        ALOGE("configfs setup not done yet");
+        ALOGE("configfs setup not done after 30 s, giving up");
         abort();
     }
 }

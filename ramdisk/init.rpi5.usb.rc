@@ -81,6 +81,8 @@ on boot
     chown system system /config/usb_gadget/g1/strings/0x409/manufacturer
     chown system system /config/usb_gadget/g1/strings/0x409/product
     chown system system /config/usb_gadget/g1/strings/0x409/serialnumber
+    # Gadget HAL only after the gadget exists (see its rc: disabled)
+    start vendor.usb_gadget-rpi
 
 on property:sys.usb.controller=*
     mount functionfs adb /dev/usb-ffs/adb rmode=0770,fmode=0660,uid=2000,gid=2000,no_disconnect=1

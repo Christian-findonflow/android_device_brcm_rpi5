@@ -2,3 +2,9 @@ service vendor.usb_gadget-rpi /apex/com.android.hardware.usb.gadget.rpi5/bin/hw/
     class hal
     user system
     group system shell mtp
+    # Started explicitly from init.rpi5.usb.rc once the configfs gadget (and
+    # os_desc/b.1) exists. As a plain "class hal" service it raced the
+    # vendor "on boot" block, aborted ("configfs setup not done yet"), and
+    # UsbService then crashed system_server at the user switch on every boot
+    # (2026-09-05).
+    disabled
