@@ -971,15 +971,17 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
             LOG(INFO) << "Ride mode changed: " << driveMode << (driveMode == DRIVE_MODE_SPORT ? " (Sport)" : "");
         }
     }
-    {
-        constexpr int64_t kBmsCurrentFreshNs = 5LL * 1000000000LL;
-        bool bmsFresh = mLastBmsCurrentNs != 0 && (timestamp - mLastBmsCurrentNs) < kBmsCurrentFreshNs;
-        updateChargingState(rpm, bmsFresh ? mBmsCurrentA : current, timestamp);
-    }
+    // The controller's current sensor reads -1.7 A with the bike at rest
+    // (measured 2026-09-05); the BMS shunt (0xF00C) is the truth whenever it
+    // is fresh, for charging detection, the energy model and the display.
+    constexpr int64_t kBmsCurrentFreshNs = 5LL * 1000000000LL;
+    bool bmsFresh = mLastBmsCurrentNs != 0 && (timestamp - mLastBmsCurrentNs) < kBmsCurrentFreshNs;
+    float bestCurrent = bmsFresh ? mBmsCurrentA : current;
+    updateChargingState(rpm, bestCurrent, timestamp);
     float speedMps = calculateSpeedFromRpm(rpm);
     mLastSpeedMps.store(speedMps, std::memory_order_relaxed);  // for the lean estimator
     accumulateDistance(speedMps, timestamp);
-    accumulateEnergy(voltage, current, speedMps, timestamp);
+    accumulateEnergy(voltage, bestCurrent, speedMps, timestamp);
     publishDistance(timestamp);
     persistDistanceIfDue(timestamp, /*force=*/false);
     sendDisplayReportIfDue(timestamp, speedMps);
@@ -1052,11 +1054,11 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
         notifyPropertyChange(VENDOR_BATTERY_VOLTAGE, value);
     }
 
-    // Update Current (vendor property)
+    // Update Current (vendor property) - BMS shunt when fresh, see above
     {
         std::lock_guard<std::mutex> lock(mValuesMutex);
         auto& value = mCurrentValues[VENDOR_BATTERY_CURRENT];
-        value.value.floatValues[0] = current;
+        value.value.floatValues[0] = bestCurrent;
         value.timestamp = timestamp;
         notifyPropertyChange(VENDOR_BATTERY_CURRENT, value);
     }
