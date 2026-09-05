@@ -440,3 +440,38 @@ config_earlyStartupServices) or move its work elsewhere.
   must be bootloader unlocked"); upstream's cmdline `androidboot.verifiedbootstate=orange`
   commit fixes that. Until then: stop the HAL, `mount -o remount,rw /vendor`,
   cp, restorecon, remount ro, start.
+
+## First day on the bike (2026-09-05) - state and open items
+
+Live over adb (192.168.4.73) with the dash on the bike, CAN + optos wired.
+Everything below was fixed by pushing binaries to the bike over the LAN; the
+flashed image (2026-09-05 mkimg, from 22:19 the day before) predates all of
+it, so the NEXT full image build must include the fork tips
+(device f9fa15d+, launcher a37cc8bb+) - see TESTING.md "First live capture".
+
+Fixed today: indicators pinned on (active_low parsed with atoi; pull bias
+added; raw levels row in Workshop); CAN bus-off with no auto-restart; HAL
+reader thread died on interface down/up; BMS OBD2 on 0x7E3/0x7EB; 0x6B1 is
+the Orion current-limit message (SoC was wrong); controller current offset
+(-1.7 A at rest) replaced by the BMS shunt for display/charging/energy;
+gear + ride mode decoded from the status nibble (P/R/D, modes 1-3, Sport);
+controller "over voltage" flag gated on the pack's full-charge voltage
+(CFG_PACK_MAX_VOLTAGE, Workshop field, default 89.25 V for 21s).
+
+Open:
+- **Left indicator**: GPIO 16 never toggles; no free header line toggles
+  either, so the opto's left channel/wire is not delivering (Christian has a
+  loose wire to check). Pins: left 36 (GPIO16), right 38 (GPIO20), high beam
+  40 (GPIO21), GND 34/39. Reassignable in Workshop.
+- **High beam input glitch**: GPIO 21 read "on" from 13:22 to ~13:30 with the
+  beam off (then recovered). Watch for a flaky opto channel / wire.
+- **Unknown controller frames** 0x10261051 (byte 5 AA->B4 while a button is
+  pressed) and 0x1026105A (byte 5 tracks motor state 0..7, byte 6 counter).
+  Not decoded; capture more rides.
+- **Speed calibration**: wheel circumference / gear ratio are defaults; the
+  motor rpm field may be motor or wheel rpm. Compare CAN speed with GPS on
+  the first ride (a Workshop "GPS vs CAN speed" row would make this a
+  one-look job).
+- **Runtime VHAL restart kills the cockpit** (see above) - relaunch needed.
+- **cf simulator** still carries the old HAL/sim (0x7E0); rebuild before the
+  next e2e run.
