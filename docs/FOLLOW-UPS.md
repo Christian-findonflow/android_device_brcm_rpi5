@@ -523,3 +523,15 @@ OsmAnd prompts. Findings and plan:
   with the Android 15 HFP software datapath); fallbacks: LE Audio if the
   earbuds do standard LC3, or calls stay phone<->earbuds with the dash doing
   caller ID + answer/decline only. MAP stays off (remote-SIM crash).
+
+## system_server crashes once at EVERY boot (confirmed 2026-09-05)
+
+`UsbService.onSwitchUser` NPE on the android.fg thread at the user-10
+switch: UsbService is null because the USB gadget HAL
+(com.android.hardware.usb.gadget.rpi5, "bcdVersion must be 0x0100" in
+configfs) aborts at boot, twice, before UsbService can bind. The framework
+restarts and the boot completes, so it went unnoticed, but it costs ~5 s of
+boot, restarts audioserver (which is why the audio HAL rename mattered) and
+leaves tombstones on every boot. Fix the gadget HAL crash (or drop the
+gadget HAL: the dash never acts as a USB device on the bike; dwc2 is in
+peripheral mode only for adb over USB-C on the bench).
