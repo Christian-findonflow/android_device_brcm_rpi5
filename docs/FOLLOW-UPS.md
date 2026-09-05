@@ -423,3 +423,20 @@ config_earlyStartupServices) or move its work elsewhere.
 | 0x6B1 temp | byte 7 minus 40 | CanSettings said byte 1, no offset |
 | Gear display | P/R/N/D direct | spec note: display "needs +1" |
 | Controller current | signed int16 x0.1 A | old code assumed 320 A offset |
+
+- **VHAL restart at runtime blanks the right panel** (seen 2026-09-05 on the
+  bike while swapping the HAL over adb): CarService reconnects but
+  HomeCockpitActivity is gone until `am start --user 10
+  com.android.car.carlauncher/.HomeCockpitActivity` (or a reboot). Boot-time
+  restart is fine because the launcher starts afterwards. The cockpit should
+  survive a car-service reconnect, and CarLauncher should relaunch it if
+  missing. Low priority (only bites during bench work).
+- **Backlight sysfs label**: the lights HAL logs an avc denial opening
+  `/sys/devices/platform/axi/1000120000.pcie/1f00080000.i2c/i2c-11/11-0045/backlight/11-0045/brightness`
+  - our genfscon labels the `/class/backlight/...` symlink path, not the real
+  device path. Harmless while SELinux is permissive; fix the genfscon before
+  ever going enforcing.
+- **Bench loop on the bike (2026-09-05)**: `adb remount` is refused ("Device
+  must be bootloader unlocked"); upstream's cmdline `androidboot.verifiedbootstate=orange`
+  commit fixes that. Until then: stop the HAL, `mount -o remount,rw /vendor`,
+  cp, restorecon, remount ro, start.
