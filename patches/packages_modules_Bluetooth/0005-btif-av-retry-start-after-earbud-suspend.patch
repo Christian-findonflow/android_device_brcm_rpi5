@@ -1,0 +1,66 @@
+diff --git a/system/btif/src/btif_av.cc b/system/btif/src/btif_av.cc
+index 1c1ad7f..765e8d1 100644
+--- a/system/btif/src/btif_av.cc
++++ b/system/btif/src/btif_av.cc
+@@ -2481,6 +2481,43 @@ bool BtifAvStateMachine::StateOpened::ProcessEvent(uint32_t event, void* p_data)
+   return true;
+ }
+ 
++// NEO dash: the earbuds (our sink peer) can suspend the stream on their own
++// (out-of-ear detection, an iPhone borrowing them for a prompt) while the
++// phone keeps playing into our sink. AOSP makes such a suspend sticky until
++// the remote's AVRCP PLAY clears kFlagRemoteSuspend; on this build the
++// earbuds' pass-through goes to the new AVRCP target profile and never
++// reaches this state machine, and the audio HAL port stays STARTED so nothing
++// re-issues START either: the earbuds would stay silent until the phone
++// itself paused. Instead retry START a few times while the phone streams.
++static const std::chrono::milliseconds kRestartAfterRemoteSuspendDelays[] = {
++        std::chrono::milliseconds(2000), std::chrono::milliseconds(5000),
++        std::chrono::milliseconds(10000)};
++
++static void btif_av_restart_after_remote_suspend(const RawAddress& peer_address, size_t attempt) {
++  BtifAvPeer* peer = btif_av_source_find_peer(peer_address);
++  if (peer == nullptr || peer->StateMachine().StateId() != BtifAvStateMachine::kStateOpened ||
++      peer->CheckFlags(BtifAvPeer::kFlagPendingStart | BtifAvPeer::kFlagPendingStop)) {
++    return;
++  }
++  if (!btif_av_stream_started_ready(A2dpType::kSink)) {
++    log::info("peer={} attempt={}: our sink is not streaming, nothing to resume", peer_address,
++              attempt);
++    return;
++  }
++  log::info("peer={} attempt={}: re-starting the stream after a remote suspend", peer_address,
++            attempt);
++  btif_av_source_dispatch_sm_event(peer_address, BTIF_AV_START_STREAM_REQ_EVT);
++}
++
++static void btif_av_schedule_restart_after_remote_suspend(const RawAddress& peer_address) {
++  const size_t n = sizeof(kRestartAfterRemoteSuspendDelays) / sizeof(kRestartAfterRemoteSuspendDelays[0]);
++  for (size_t i = 0; i < n; i++) {
++    do_in_main_thread_delayed(
++            base::BindOnce(btif_av_restart_after_remote_suspend, peer_address, i + 1),
++            kRestartAfterRemoteSuspendDelays[i]);
++  }
++}
++
+ void BtifAvStateMachine::StateStarted::OnEnter() {
+   log::info("state=Started peer={}", peer_.PeerAddress());
+ 
+@@ -2609,7 +2646,16 @@ bool BtifAvStateMachine::StateStarted::ProcessEvent(uint32_t event, void* p_data
+         // Set remote suspend flag to block media task from restarting
+         // stream only if we did not already initiate a local suspend.
+         if (!peer_.CheckFlags(BtifAvPeer::kFlagLocalSuspendPending)) {
+-          peer_.SetFlags(BtifAvPeer::kFlagRemoteSuspend);
++          if (btif_av_src_sink_coexist_enabled() && peer_.IsSink() &&
++              btif_av_stream_started_ready(A2dpType::kSink)) {
++            // NEO dash: the earbuds suspended us while the phone is still
++            // playing into our sink. Do not make it sticky; try again soon.
++            log::info("Peer {} : remote suspend while our sink streams, will retry START",
++                      peer_.PeerAddress());
++            btif_av_schedule_restart_after_remote_suspend(peer_.PeerAddress());
++          } else {
++            peer_.SetFlags(BtifAvPeer::kFlagRemoteSuspend);
++          }
+         }
+       } else {
+         state = BTAV_AUDIO_STATE_STOPPED;

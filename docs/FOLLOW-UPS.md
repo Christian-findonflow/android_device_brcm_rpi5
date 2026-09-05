@@ -602,8 +602,10 @@ scratchpad `snoop.py`/`snoop3.py`):
   remote SUSPEND the audio HAL's Bluetooth port stays STARTED and every
   write overflows ("Data 0/512 overflow 1000 ms") until the output goes to
   standby - on a phone the app pauses; here the phone keeps streaming. Needs
-  a restart path (re-START the earbud stream while our sink is live, or tell
-  the HAL port it is suspended) - open.
+  a restart path - DONE as patch 0005 (retry START at 2/5/10 s while our sink
+  streams; the earbuds' PLAY key never reaches btif_av on this build because
+  the new AVRCP target profile handles it). Bench check pending: earbud
+  out/in, Siri on the phone then dismiss.
 - RESULT 23:41 with patches 0001-0004 on the bike: Christian - "music works
   and is stable, play pause skip etc all working well". Snoop: 43 media
   packets/s to the earbuds sustained for minutes, zero AVDTP drops, phone
