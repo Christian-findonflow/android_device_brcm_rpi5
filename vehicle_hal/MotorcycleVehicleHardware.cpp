@@ -1470,7 +1470,27 @@ void MotorcycleVehicleHardware::bmsPollingThread() {
     };
     size_t pidIndex = 0;
     bool firstPassDone = false;
+    bool waitingLogged = false;
     while (mRunning) {
+        // Only poll a BMS that is demonstrably on the bus (0x6B1 seen in the
+        // last 5 s). Polling a silent bus leaves every request unACKed and
+        // drives the CAN controller to bus-off within seconds - seen on the
+        // bike 2026-09-05 before the bus was wired, and the same would happen
+        // whenever the Pi boots ahead of the BMS.
+        constexpr int64_t kBmsAliveNs = 5LL * 1000000000LL;
+        int64_t lastBms = mLastBmsFrameNs.load(std::memory_order_relaxed);
+        if (lastBms == 0 || elapsedRealtimeNano() - lastBms > kBmsAliveNs) {
+            if (!waitingLogged) {
+                LOG(INFO) << "BMS polling paused: no 0x6B1 broadcast on the bus";
+                waitingLogged = true;
+            }
+            if (!sleepUnlessStopping(500)) break;
+            continue;
+        }
+        if (waitingLogged) {
+            LOG(INFO) << "BMS broadcast seen, OBD2 polling resumed";
+            waitingLogged = false;
+        }
         for (uint16_t pid : fastPids) {
             query(pid);
         }
