@@ -565,6 +565,17 @@ scratchpad `snoop.py`/`snoop3.py`):
 - Also seen: the AirPods send AVRCP PAUSE to the dash (in-ear detection) -
   the dash's AVRCP target must forward that to the phone's player, check once
   Phase 1 passes.
+- Second fault, found on the retest with the deadlock fixed: Music screen said
+  "Bluetooth audio disconnected". Snoop showed the phone's AVCTP channel still
+  open; the stack had closed it internally. `bta_av_api_set_peer_sep` (coexist
+  mode = a2dp source AND sink profiles enabled, which is our config) declares
+  "current dut is src" when the earbuds' SNK role becomes known and calls
+  `AVRC_UpdateCcb(addr, AVRC_CO_METADATA)`, which sends a synthetic close to
+  EVERY legacy (controller) AVRCP connection, i.e. the phone's. Controller
+  service -> `setActiveDevice(null)` -> A2DP sink session ended. Fix:
+  patches/packages_modules_Bluetooth/0002 (AVCT_GetPeerAddr + skip other
+  peers' connections). AOSP's coexist code was written for one peer changing
+  role, not two peers in different roles.
 
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 

@@ -1,0 +1,75 @@
+diff --git a/system/stack/avct/avct_api.cc b/system/stack/avct/avct_api.cc
+index c23f89d..5421844 100644
+--- a/system/stack/avct/avct_api.cc
++++ b/system/stack/avct/avct_api.cc
+@@ -366,6 +366,24 @@ uint16_t AVCT_GetPeerMtu(uint8_t handle) {
+   return peer_mtu;
+ }
+ 
++/*******************************************************************************
++ *
++ * Function         AVCT_GetPeerAddr
++ *
++ * Description      Get the BD address of the peer for the given connection.
++ *
++ * Returns          true if the handle maps to a connection with a link.
++ *
++ ******************************************************************************/
++bool AVCT_GetPeerAddr(uint8_t handle, RawAddress* peer_addr) {
++  tAVCT_CCB* p_ccb = avct_ccb_by_idx(handle);
++  if (p_ccb == NULL || p_ccb->p_lcb == NULL || peer_addr == NULL) {
++    return false;
++  }
++  *peer_addr = p_ccb->p_lcb->peer_addr;
++  return true;
++}
++
+ /*******************************************************************************
+  *
+  * Function         AVCT_MsgReq
+diff --git a/system/stack/avrc/avrc_api.cc b/system/stack/avrc/avrc_api.cc
+index 7a2d2f4..44b988d 100644
+--- a/system/stack/avrc/avrc_api.cc
++++ b/system/stack/avrc/avrc_api.cc
+@@ -1460,6 +1460,17 @@ void AVRC_UpdateCcb(RawAddress* addr, uint32_t company_id) {
+   for (uint8_t i = 0; i < AVCT_NUM_CONN; i++) {
+     log::info("handle:{}, update cback:0x{:0x}", i, company_id);
+     if (avrc_cb.ccb[i].company_id == company_id) {
++      // NEO dash: the caller is switching the role of ONE peer (|addr|). A
++      // connection that belongs to a different peer must keep its callback,
++      // or a sink peer arriving (earbuds) tears down the controller link to
++      // the source peer that is already streaming (phone): the phone's AVRCP
++      // channel got a synthetic close, the controller service dropped it and
++      // with it the A2DP sink active device (2026-09-05).
++      RawAddress ccb_addr;
++      if (AVCT_GetPeerAddr(i, &ccb_addr) && addr != nullptr && ccb_addr != *addr) {
++        log::info("handle:{} belongs to {}, not {}: leaving it alone", i, ccb_addr, *addr);
++        continue;
++      }
+       avrc_cb.ccb[i].ctrl_cback.Run(i, AVRC_CLOSE_IND_EVT, 0, addr);
+     }
+   }
+diff --git a/system/stack/include/avct_api.h b/system/stack/include/avct_api.h
+index bcc40ee..ab1c5cc 100644
+--- a/system/stack/include/avct_api.h
++++ b/system/stack/include/avct_api.h
+@@ -256,6 +256,19 @@ uint16_t AVCT_GetBrowseMtu(uint8_t handle);
+  ******************************************************************************/
+ uint16_t AVCT_GetPeerMtu(uint8_t handle);
+ 
++/*******************************************************************************
++ *
++ * Function         AVCT_GetPeerAddr
++ *
++ * Description      Get the BD address of the peer on the other end of the
++ *                  AVCTP connection with the given handle.
++ *
++ * Returns          true and fills |peer_addr| if the handle is bound to an
++ *                  open link, false otherwise.
++ *
++ ******************************************************************************/
++bool AVCT_GetPeerAddr(uint8_t handle, RawAddress* peer_addr);
++
+ /*******************************************************************************
+  *
+  * Function         AVCT_MsgReq
