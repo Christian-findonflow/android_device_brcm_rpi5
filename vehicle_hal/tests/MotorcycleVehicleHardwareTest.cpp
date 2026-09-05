@@ -68,6 +68,8 @@ class MotorcycleVehicleHardwareTestPeer {
     }
     void setImuMounting(const imu::Mounting& m) { mHw->mLean.setMounting(m); }
     void setImuPresent() { mHw->mImuSourceBits = IMU_STATUS_PRESENT; }
+    const std::vector<VehiclePropConfig>& propertyConfigs() const { return mHw->mPropertyConfigs; }
+    const VehiclePropValue& currentValue(int32_t prop) { return mHw->mCurrentValues[prop]; }
     void setLiveSpeed(float mps, int64_t ts) {
         mHw->mLastSpeedMps = mps;
         mHw->mLastControllerFrameNs = ts;
@@ -1342,6 +1344,34 @@ TEST_F(MotorcycleVehicleHardwareTest, OverVoltageFlagGatedByPackCeiling) {
     faults = lastEvent(VENDOR_FAULT_FLAGS);
     ASSERT_TRUE(faults.has_value());
     EXPECT_EQ(faults->value.int32Values[0] & FAULT_OVER_VOLTAGE, 0);
+}
+
+// Every property id carries its value type in bits 16-23; CarService trusts
+// that nibble, so a value filled as int32 under an INT64 id never reaches
+// the UI (pack cycles showed 0 on the bike, 2026-09-05: 0x2150xxxx = INT64).
+TEST_F(MotorcycleVehicleHardwareTest, PropertyIdTypeMatchesStoredValue) {
+    constexpr int32_t kTypeMask = 0x00FF0000;
+    constexpr int32_t kInt32 = 0x00400000, kInt64 = 0x00500000, kFloat = 0x00600000;
+    constexpr int32_t kInt32Vec = 0x00410000, kFloatVec = 0x00610000, kBool = 0x00200000;
+    for (const auto& cfg : mPeer->propertyConfigs()) {
+        const auto& v = mPeer->currentValue(cfg.prop);
+        int32_t type = cfg.prop & kTypeMask;
+        char id[16];
+        snprintf(id, sizeof(id), "0x%08X", cfg.prop);
+        if (type == kFloat) {
+            EXPECT_EQ(v.value.floatValues.size(), 1u) << id;
+        } else if (type == kFloatVec) {
+            EXPECT_GE(v.value.floatValues.size(), 1u) << id;
+        } else if (type == kInt32 || type == kBool) {
+            EXPECT_EQ(v.value.int32Values.size(), 1u) << id;
+        } else if (type == kInt32Vec) {
+            EXPECT_GE(v.value.int32Values.size(), 1u) << id;
+        } else if (type == kInt64) {
+            EXPECT_EQ(v.value.int64Values.size(), 1u) << id << " is INT64 but the HAL fills int32";
+        } else {
+            ADD_FAILURE() << id << " has an unexpected value type nibble";
+        }
+    }
 }
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle
