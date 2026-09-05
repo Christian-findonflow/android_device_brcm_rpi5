@@ -543,6 +543,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addFloatVendorProp(VENDOR_ALTITUDE_M, -1000.0f, 10000.0f, 0.0f);
     addFloatVendorProp(VENDOR_IMU_TEMP_C, -50.0f, 150.0f, 0.0f);
     addIntVendorProp(VENDOR_IMU_STATUS, 0);
+    addIntVendorProp(VENDOR_RAW_GPIO, 0);
     {
         // Raw sensor axes for the Workshop mounting check: float[6].
         VehiclePropConfig config;
@@ -2105,6 +2106,7 @@ StatusCode MotorcycleVehicleHardware::applyConfigValue(const VehiclePropValue& v
             int32_t v;
             if (!intArg(0, 1, &v)) return StatusCode::INVALID_ARG;
             mGpioActiveLow = (v != 0);
+            mGpioBiasDirty = true;  // GPIO thread re-applies the matching pull
             persistConfig("persist.vendor.motodash.gpio.active_low", std::to_string(v));
             break;
         }
@@ -2387,9 +2389,10 @@ void MotorcycleVehicleHardware::loadConfig() {
     if (property_get("persist.vendor.motodash.gpio.high_beam", propValue, "-1") > 0) {
         mGpioHighBeamPin = atoi(propValue);
     }
-    if (property_get("persist.vendor.motodash.gpio.active_low", propValue, "1") > 0) {
-        mGpioActiveLow = (atoi(propValue) != 0);
-    }
+    // Accepts "1"/"0" (what the HAL persists) and "true"/"false" (what the
+    // product makefile ships). atoi("true") is 0, which silently flipped
+    // every indicator to active-high on a fresh userdata.
+    mGpioActiveLow = property_get_bool("persist.vendor.motodash.gpio.active_low", true);
     
     mVerboseCanLog = property_get_bool("persist.vendor.motodash.debug.canlog", false);
     if (mVerboseCanLog) {
@@ -2495,14 +2498,23 @@ void MotorcycleVehicleHardware::gpioReaderThread() {
     
     // Use GPIO character device ioctl interface
     // Request GPIO lines for input
-    auto requestGpioLine = [this](int pin) -> int {
+    // The indicator inputs come through optoisolators, i.e. open-collector
+    // outputs: an idle line is floating and needs a pull toward the
+    // inactive level, or it reads whatever the SoC's default pull says
+    // (BCM 9-27 default to pull-down, which with active-low logic shows
+    // every indicator "on"). Pull-up for active-low, pull-down otherwise.
+    auto biasFlags = [this]() -> uint64_t {
+        return mGpioActiveLow.load() ? GPIO_V2_LINE_FLAG_BIAS_PULL_UP
+                                     : GPIO_V2_LINE_FLAG_BIAS_PULL_DOWN;
+    };
+    auto requestGpioLine = [this, &biasFlags](int pin) -> int {
         if (pin < 0) return -1;
         
         struct gpio_v2_line_request req;
         memset(&req, 0, sizeof(req));
         req.offsets[0] = pin;
         req.num_lines = 1;
-        req.config.flags = GPIO_V2_LINE_FLAG_INPUT;
+        req.config.flags = GPIO_V2_LINE_FLAG_INPUT | biasFlags();
         strncpy(req.consumer, "motodash", sizeof(req.consumer) - 1);
         
         if (ioctl(mGpioChipFd, GPIO_V2_GET_LINE_IOCTL, &req) < 0) {
@@ -2540,12 +2552,40 @@ void MotorcycleVehicleHardware::gpioReaderThread() {
     
     int lastTurnState = -1;
     int lastHighBeamState = -1;
+    int lastRawBits = -1;
+    auto reconfigure = [&biasFlags](int lineFd) {
+        if (lineFd < 0) return;
+        struct gpio_v2_line_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.flags = GPIO_V2_LINE_FLAG_INPUT | biasFlags();
+        if (ioctl(lineFd, GPIO_V2_LINE_SET_CONFIG_IOCTL, &cfg) < 0) {
+            LOG(WARNING) << "GPIO bias reconfigure failed: " << strerror(errno);
+        }
+    };
     
     while (mRunning) {
+        if (mGpioBiasDirty.exchange(false)) {
+            reconfigure(leftFd);
+            reconfigure(rightFd);
+            reconfigure(highBeamFd);
+            LOG(INFO) << "GPIO bias re-applied for activeLow=" << mGpioActiveLow.load();
+        }
         // Read GPIO states
         int leftRaw = readGpioLine(leftFd);
         int rightRaw = readGpioLine(rightFd);
         int highBeamRaw = readGpioLine(highBeamFd);
+
+        // Raw electrical levels for the Workshop, published on change.
+        int rawBits = (leftRaw == 1 ? 1 : 0) | (rightRaw == 1 ? 2 : 0) | (highBeamRaw == 1 ? 4 : 0) |
+                      (leftFd >= 0 ? 8 : 0) | (rightFd >= 0 ? 16 : 0) | (highBeamFd >= 0 ? 32 : 0);
+        if (rawBits != lastRawBits) {
+            lastRawBits = rawBits;
+            std::lock_guard<std::mutex> lock(mValuesMutex);
+            auto& v = mCurrentValues[VENDOR_RAW_GPIO];
+            v.value.int32Values[0] = rawBits;
+            v.timestamp = elapsedRealtimeNano();
+            notifyPropertyChange(VENDOR_RAW_GPIO, v);
+        }
         
         // Apply active-low logic if needed
         bool leftActive = (leftRaw >= 0) && (mGpioActiveLow ? (leftRaw == 0) : (leftRaw == 1));

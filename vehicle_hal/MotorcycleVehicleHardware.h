@@ -174,6 +174,10 @@ constexpr int32_t IMU_STATUS_FORWARD_SET = 1 << 3;
 constexpr int32_t IMU_STATUS_SIMULATED = 1 << 4;
 constexpr int32_t IMU_STATUS_VALID = 1 << 5;
 constexpr int32_t IMU_STATUS_LEVEL_FAILED = 1 << 6;
+// Raw GPIO input levels for the Workshop indicator diagnosis: bit0 left
+// turn, bit1 right turn, bit2 high beam (electrical level, before the
+// active-low logic); bit3..5 = the corresponding line is configured.
+constexpr int32_t VENDOR_RAW_GPIO = 0x2140006C;
 constexpr float CHARGING_CURRENT_THRESHOLD_A = -0.5f;
 
 // Fault flags from the controller, combined into one bitfield so the UI needs
@@ -385,6 +389,9 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int mGpioRightTurnPin = -1;
     int mGpioHighBeamPin = -1;
     std::atomic<bool> mGpioActiveLow{true};
+    // Set when active-low changes at runtime: the GPIO thread re-applies the
+    // line bias (pull-up for active-low, pull-down otherwise).
+    std::atomic<bool> mGpioBiasDirty{false};
     std::thread mGpioReaderThread;
     bool mGpioDebugSource = false;
     
