@@ -439,19 +439,26 @@ TEST_F(MotorcycleVehicleHardwareTest, ControllerTempsDecode) {
     EXPECT_FLOAT_EQ(throttle->value.floatValues[0], 55.0f);
 }
 
-// BMS broadcast 0x6B1, observed layout: SOC = byte 3, temp = byte 7 - 40
-TEST_F(MotorcycleVehicleHardwareTest, BmsBroadcastDecodesSocAndTemp) {
-    auto frame = makeFrame(CAN_ID_BMS, /*extended=*/false,
-                           {0, 99, 0, 18, 3, 2, 0, 51});
-    mPeer->processCanFrame(frame);
+// BMS broadcast 0x6B1 = Orion's default second message: discharge/charge
+// current limits, high/low cell temperature, checksum. Raw frame as seen on
+// the bike 2026-09-05.
+TEST_F(MotorcycleVehicleHardwareTest, DecodesOrionBmsBroadcast) {
+    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0x00, 0x60, 0x00, 0x1B, 0x13, 0x11, 0x00, 0x58}));
+    EXPECT_FLOAT_EQ(lastEvent(VENDOR_DISCHARGE_LIMIT)->value.floatValues[0], 96.0f);
+    EXPECT_FLOAT_EQ(lastEvent(VENDOR_CHARGE_LIMIT)->value.floatValues[0], 27.0f);
+    EXPECT_FLOAT_EQ(lastEvent(VENDOR_PACK_TEMP_HIGH)->value.floatValues[0], 19.0f);
+    EXPECT_FLOAT_EQ(lastEvent(VENDOR_PACK_TEMP_LOW)->value.floatValues[0], 17.0f);
+    EXPECT_FLOAT_EQ(lastEvent(VENDOR_PACK_TEMP_AVG)->value.floatValues[0], 18.0f);
+    // The old guess read byte 3 as SoC; it must not touch the battery level.
+    EXPECT_FALSE(lastEvent(PROP_EV_BATTERY_LEVEL).has_value());
+    auto link = lastEvent(VENDOR_LINK_STATUS);
+    ASSERT_TRUE(link.has_value());
+    EXPECT_NE(link->value.int32Values[0] & LINK_BMS, 0);
 
-    auto soc = lastEvent(PROP_EV_BATTERY_LEVEL);
-    ASSERT_TRUE(soc.has_value());
-    EXPECT_FLOAT_EQ(soc->value.floatValues[0], 18.0f);
-
-    auto temp = lastEvent(VENDOR_PACK_TEMP_AVG);
-    ASSERT_TRUE(temp.has_value());
-    EXPECT_FLOAT_EQ(temp->value.floatValues[0], 11.0f);  // 51 - 40
+    // A corrupted frame (bad checksum) is ignored entirely.
+    clearEvents();
+    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0x00, 0x60, 0x00, 0x1B, 0x13, 0x11, 0x00, 0x57}));
+    EXPECT_FALSE(lastEvent(VENDOR_DISCHARGE_LIMIT).has_value());
 }
 
 // OBD2 Mode 0x22 response: [len, 0x62, pidHi, pidLo, data...]
@@ -687,7 +694,7 @@ TEST_F(MotorcycleVehicleHardwareTest, LinkDropsWhenControllerGoesSilent) {
 }
 
 TEST_F(MotorcycleVehicleHardwareTest, BmsLinkIndependentOfController) {
-    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0, 99, 0, 18, 3, 2, 0, 51}));
+    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0x00, 0x60, 0x00, 0x1B, 0x13, 0x11, 0x00, 0x58}));
     auto link = lastEvent(VENDOR_LINK_STATUS);
     ASSERT_TRUE(link.has_value());
     EXPECT_EQ(link->value.int32Values[0], LINK_BMS);
@@ -869,18 +876,21 @@ TEST_F(MotorcycleVehicleHardwareTest, PackEnergyConfigAppliesAndValidates) {
 // BMS OBD2: authoritative SoC / current, big-endian payloads
 // ============================================================================
 
-TEST_F(MotorcycleVehicleHardwareTest, PidSocOutranksBroadcastSoc) {
-    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0, 99, 0, 50, 3, 2, 0, 65}));
-    EXPECT_FLOAT_EQ(lastEvent(PROP_EV_BATTERY_LEVEL)->value.floatValues[0], 50.0f);
+TEST_F(MotorcycleVehicleHardwareTest, SocComesOnlyFromThePid) {
+    // The broadcast carries no SoC (it is the current-limit message).
+    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0x00, 0x60, 0x00, 0x1B, 0x13, 0x11, 0x00, 0x58}));
+    EXPECT_FALSE(lastEvent(PROP_EV_BATTERY_LEVEL).has_value());
 
-    // 0xF00F answers 61.5% (raw 123 at 0.5%/bit): it wins...
+    // 0xF00F answers 61.5% (raw 123 at 0.5%/bit) on Orion's 0x7EB.
     mPeer->processCanFrame(makeFrame(CAN_ID_OBD2_RESPONSE, false,
                                      {0x04, 0x62, 0xF0, 0x0F, 123, 0, 0, 0}));
     EXPECT_FLOAT_EQ(lastEvent(PROP_EV_BATTERY_LEVEL)->value.floatValues[0], 61.5f);
+    EXPECT_EQ(CAN_ID_OBD2_RESPONSE, 0x7EBu);
+    EXPECT_EQ(CAN_ID_OBD2_REQUEST, 0x7E3u);
 
-    // ...and a following broadcast no longer overrides it
+    // A following broadcast leaves it alone.
     clearEvents();
-    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0, 99, 0, 50, 3, 2, 0, 65}));
+    mPeer->processCanFrame(makeFrame(CAN_ID_BMS, false, {0x00, 0x60, 0x00, 0x1B, 0x13, 0x11, 0x00, 0x58}));
     EXPECT_FALSE(lastEvent(PROP_EV_BATTERY_LEVEL).has_value());
 }
 

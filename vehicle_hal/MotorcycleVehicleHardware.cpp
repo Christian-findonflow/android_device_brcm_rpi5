@@ -823,8 +823,20 @@ void MotorcycleVehicleHardware::canReaderThread() {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 continue;
             }
-            LOG(ERROR) << "CAN read error: " << strerror(errno);
-            break;
+            if (!mRunning) break;
+            // ENETDOWN and friends: the interface went down (bus-off restart,
+            // `ip link set can1 down/up` on the bench). Seen on the bike
+            // 2026-09-05: the thread used to exit here and the dashboard
+            // stayed blind while the OBD2 poller kept transmitting. Reopen.
+            LOG(ERROR) << "CAN read error: " << strerror(errno) << " - reopening the socket";
+            close(mCanSocket);
+            mCanSocket = -1;
+            while (mRunning && !openCanSocket()) {
+                if (!sleepUnlessStopping(1000)) break;
+            }
+            if (mCanSocket < 0) break;
+            LOG(INFO) << "CAN socket reopened, fd=" << mCanSocket;
+            continue;
         }
 
         if (nbytes == sizeof(frame)) {
@@ -1093,72 +1105,53 @@ void MotorcycleVehicleHardware::processControllerTemps(const uint8_t* data) {
 }
 
 void MotorcycleVehicleHardware::processBmsData(const uint8_t* data) {
+    // Orion BMS default broadcast 0x6B1, confirmed on the bike 2026-09-05
+    // (raw 00 60 00 1B 13 11 00 58 with the pack at 4.11 V/cell):
+    //   bytes 0-1  discharge current limit, A, big-endian
+    //   bytes 2-3  charge current limit, A, big-endian
+    //   byte 4     highest cell temperature, degC (signed)
+    //   byte 5     lowest cell temperature, degC (signed)
+    //   byte 6     unused
+    //   byte 7     checksum = (sum of bytes 0-6 + length 8 + CAN ID) & 0xFF
+    // SoC, pack current and voltage are NOT in here (they live in Orion's
+    // 0x6B0 message, which this BMS does not send); they come from the OBD2
+    // PIDs. The earlier "byte 3 = SoC" guess was the charge current limit.
+    uint32_t sum = 8 + (mCanIdBms.load(std::memory_order_relaxed) & 0xFF);
+    for (int i = 0; i < 7; i++) sum += data[i];
+    if ((sum & 0xFF) != data[7]) {
+        static int badChecksums = 0;
+        if (++badChecksums % 100 == 1) {
+            LOG(WARNING) << "BMS 0x6B1 checksum mismatch (" << badChecksums << " so far)";
+        }
+        return;
+    }
     mLastBmsFrameNs.store(elapsedRealtimeNano(), std::memory_order_relaxed);
     setLinkBit(LINK_BMS, true);
-    // BMS broadcast message 0x6B1 - based on OBSERVED data pattern:
-    // Raw: [0,99,0,18,3,2,0,51]
-    // The spec says byte0=Ah, byte1=Temp, byte2=SOC but observed data doesn't match.
-    // Observed: byte3=SOC (17-18%), byte7=Temp (raw value, needs -40 offset like OBD2)
-    // Byte 1 (99) might be voltage or something else
-    
-    int soc = data[3];           // Observed: 17-18% matches expected
-    // Apply -40 offset like Orion BMS OBD2 temps (range -40 to 80°C)
-    int batteryTemp = static_cast<int>(data[7]) - 40;
-    // int amphours = data[0];   // Always 0 in observed data
 
+    float dcl = static_cast<float>((data[0] << 8) | data[1]);
+    float ccl = static_cast<float>((data[2] << 8) | data[3]);
+    float tHigh = static_cast<float>(static_cast<int8_t>(data[4]));
+    float tLow = static_cast<float>(static_cast<int8_t>(data[5]));
     int64_t timestamp = elapsedRealtimeNano();
-    
+
     static int bmsMsgCount = 0;
-    if (mVerboseCanLog && ++bmsMsgCount % 10 == 1) {
-        LOG(INFO) << "BMS 0x6B1 raw: [" << (int)data[0] << "," << (int)data[1] << "," 
-                  << (int)data[2] << "," << (int)data[3] << "," << (int)data[4] << ","
-                  << (int)data[5] << "," << (int)data[6] << "," << (int)data[7] << "]"
-                  << " -> SOC=" << soc << "% Temp=" << batteryTemp << "°C (raw=" << (int)data[7] << ")";
+    if (mVerboseCanLog && ++bmsMsgCount % 20 == 1) {
+        LOG(INFO) << "BMS 0x6B1: DCL " << dcl << " A, CCL " << ccl << " A, cells " << tLow
+                  << ".." << tHigh << " C";
     }
-
-    // Update Battery SoC - unless the BMS has answered 0xF00F recently, in
-    // which case that authoritative value stands and this inferred decode is
-    // only logged for the ride-capture comparison.
-    constexpr int64_t kPidSocFreshNs = 10LL * 1000000000LL;
-    bool pidSocFresh = mLastSocPidNs != 0 && (timestamp - mLastSocPidNs) < kPidSocFreshNs;
-    if (!pidSocFresh) {
-        std::lock_guard<std::mutex> lock(mValuesMutex);
-        auto& value = mCurrentValues[static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL)];
-        float prevSoc = value.value.floatValues[0];
-        value.value.floatValues[0] = static_cast<float>(soc);
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto setF = [&](int32_t prop, float v) {
+        auto& value = mCurrentValues[prop];
+        if (value.value.floatValues[0] == v && value.timestamp != 0) return;
+        value.value.floatValues[0] = v;
         value.timestamp = timestamp;
-        if (prevSoc != static_cast<float>(soc)) {
-            LOG(INFO) << "Battery SOC changed: " << prevSoc << " -> " << soc;
-        }
-        notifyPropertyChange(static_cast<int32_t>(VehicleProperty::EV_BATTERY_LEVEL), value);
-    }
-
-    // Re-project the range from the new SoC (both run on the CAN reader
-    // thread, so mLastSocPercent needs no locking).
-    if (!pidSocFresh) {
-        mLastSocPercent = static_cast<float>(soc);
-        publishRange(timestamp);
-    }
-
-    // Update Pack Amphours - disabled, broadcast data doesn't match spec
-    // Will get from OBD2 PID 0xF010 instead
-    // {
-    //     std::lock_guard<std::mutex> lock(mValuesMutex);
-    //     auto& value = mCurrentValues[VENDOR_PACK_AMPHOURS];
-    //     value.value.floatValues[0] = static_cast<float>(amphours);
-    //     value.timestamp = timestamp;
-    //     notifyPropertyChange(VENDOR_PACK_AMPHOURS, value);
-    // }
-
-    // Update Pack Temperature (use as average temp from BMS broadcast)
-    {
-        std::lock_guard<std::mutex> lock(mValuesMutex);
-        auto& value = mCurrentValues[VENDOR_PACK_TEMP_AVG];
-        value.value.floatValues[0] = static_cast<float>(batteryTemp);
-        value.timestamp = timestamp;
-        notifyPropertyChange(VENDOR_PACK_TEMP_AVG, value);
-    }
-
+        notifyPropertyChange(prop, value);
+    };
+    setF(VENDOR_DISCHARGE_LIMIT, dcl);
+    setF(VENDOR_CHARGE_LIMIT, ccl);
+    setF(VENDOR_PACK_TEMP_HIGH, tHigh);
+    setF(VENDOR_PACK_TEMP_LOW, tLow);
+    setF(VENDOR_PACK_TEMP_AVG, (tHigh + tLow) / 2.0f);
 }
 
 // ============================================================================

@@ -22,8 +22,9 @@
 
 namespace {
 
-constexpr uint32_t kRequestId = 0x7E0;
-constexpr uint32_t kResponseId = 0x7E8;
+// Orion answers on the second OBD-II pair (confirmed on the bike 2026-09-05).
+constexpr uint32_t kRequestId = 0x7E3;
+constexpr uint32_t kResponseId = 0x7EB;
 
 // value16 is the raw 16-bit payload, sent big-endian (MSB first) as UDS/OBD-II
 // data is; len 1 sends only the low byte. Values chosen to look like a healthy warm pack mid-discharge.
@@ -82,7 +83,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    printf("moto_bms_sim answering 0x7E0 mode 0x22 on %s\n", iface);
+    printf("moto_bms_sim answering 0x7E3 mode 0x22 on %s\n", iface);
     long answered = 0;
 
     struct can_frame frame;

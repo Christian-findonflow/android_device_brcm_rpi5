@@ -46,14 +46,17 @@ using ::aidl::android::hardware::automotive::vehicle::VehiclePropertyChangeMode;
 // CAN IDs for electric motorcycle controller (extended 29-bit IDs)
 constexpr uint32_t CAN_ID_CONTROLLER_STATUS = 0x10261022;  // RPM, Gear, Battery V/A, Errors
 constexpr uint32_t CAN_ID_CONTROLLER_TEMPS = 0x10261023;   // Controller/Motor temps, Throttle
-constexpr uint32_t CAN_ID_BMS = 0x6B1;                      // Battery SoC, Temp
+constexpr uint32_t CAN_ID_BMS = 0x6B1;                      // Orion broadcast: DCL, CCL, high/low temp, checksum
 // Display -> Controller: the controller expects its display to keep and
 // report the odometer/trip/speed (stock-system behaviour). 250ms, extended ID.
 constexpr uint32_t CAN_ID_DISPLAY_REPORT = 0x1026105A;
 
 // OBD2 CAN IDs for Orion BMS (standard 11-bit IDs)
-constexpr uint32_t CAN_ID_OBD2_REQUEST = 0x7E0;            // OBD2 request to BMS
-constexpr uint32_t CAN_ID_OBD2_RESPONSE = 0x7E8;           // OBD2 response from BMS
+// Orion BMS answers diagnostics on the *second* OBD-II pair (0x7E3 -> 0x7EB),
+// not the engine-ECU pair 0x7E0/0x7E8. Confirmed on the bike 2026-09-05:
+// requests on 0x7E0 were ignored, 0x7E3 answered SoC 96.5% / 85.6 V.
+constexpr uint32_t CAN_ID_OBD2_REQUEST = 0x7E3;            // OBD2 request to BMS
+constexpr uint32_t CAN_ID_OBD2_RESPONSE = 0x7EB;           // OBD2 response from BMS
 
 // Orion BMS OBD2 PIDs (Mode 0x22 - Extended Diagnostics)
 constexpr uint16_t BMS_PID_PACK_CURRENT = 0xF00C;          // Signed pack current (0.1A)

@@ -297,3 +297,36 @@ source loss.
    the way the bike leans. If it reads mirrored, the learned forward axis is
    backwards: Clear calibration, Level again and pull away hard in a straight
    line (braking also teaches it, with the sign handled).
+
+## First live capture on the bike (2026-09-05) - what the bus really says
+
+Recorded with the Workshop capture switch, bike on, stationary, then a guided
+gear/mode/throttle sequence. Facts now built into the HAL:
+
+- Bus: 250 kbit/s on kernel `can1` (the HAT channel on SPI chip-select 0).
+  IDs seen: controller 0x10261022 (status, 3.3 Hz), 0x10261023 (temps, 3.3 Hz),
+  **0x10261051 (10 Hz, unknown; byte 5 pulses AA->B4 for ~1 s per button
+  press)**, **0x1026105A (3.3 Hz, unknown; byte 6 is a rolling counter)**,
+  BMS 0x6B1 (21 Hz). Nothing else.
+- **0x6B1 is Orion's default second broadcast**, not SoC: DCL (u16 BE, A), CCL
+  (u16 BE, A), high cell temp, low cell temp (int8 C), unused, checksum =
+  (sum of bytes 0-6 + 8 + 0x6B1) & 0xFF. The earlier "byte 3 = SoC" guess was
+  the charge current limit (27 A). SoC/current/voltage are NOT broadcast.
+- **The BMS answers OBD2 on 0x7E3 -> 0x7EB** (Orion's second pair), never on
+  0x7E0. PID 0xF00F gave 96.5 %, 0xF00D 85.6 V with the 21s pack at 4.11 V/cell.
+- Controller status frame: byte 1 gear/status is a bitfield in the high
+  nibble (values 00, 10, 30, 70, B0, F0 seen; low nibble 2 = brake), current
+  (bytes 6-7) is signed, + = discharge, and reads **-1.7 A at rest** (sensor
+  offset; the BMS current via 0xF00C is the trustworthy one). Temps frame
+  byte 4 = throttle % (0..43 during a blip).
+- Indicators: right and high beam confirmed on the opto inputs (the right one
+  toggles at the flasher rate); left not yet seen.
+- Gotchas met on the way: a `ip link set can1 down/up` kills the HAL's reader
+  thread (fixed to reconnect); with nothing ACKing, the OBD2 polls drove can1
+  to bus-off - `restart-ms 100` now in init.rpi5.rc.
+
+Tools (this directory): `bike_live.sh [ip]` = one-shot snapshot over adb (CAN
+link state and frame rate, decoded values, raw indicator levels, HAL log);
+`can_timeline.py <capture> [epoch]` prints every byte change per ID from a
+capture so a rider sequence maps onto bytes; `moto_can_replay` pushed to
+/data/local/tmp on the bike sends probe frames (`... can1 7E3#0322F00F00000000`).
