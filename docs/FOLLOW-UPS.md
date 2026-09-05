@@ -604,6 +604,17 @@ scratchpad `snoop.py`/`snoop3.py`):
   standby - on a phone the app pauses; here the phone keeps streaming. Needs
   a restart path (re-START the earbud stream while our sink is live, or tell
   the HAL port it is suspended) - open.
+- RESULT 23:41 with patches 0001-0004 on the bike: Christian - "music works
+  and is stable, play pause skip etc all working well". Snoop: 43 media
+  packets/s to the earbuds sustained for minutes, zero AVDTP drops, phone
+  pause -> local suspend of the earbud stream -> both restart on play. Only
+  residue: an occasional single-packet drop (1020 frames) at the sink write
+  every ~5-10 s - the LOW_LATENCY AAudio track buffer is 2052 frames (46 ms)
+  and phone packets arrive in bursts; raise the buffer capacity (e.g.
+  8192 frames) if it is ever audible. Phase 1 = DONE. Next: Phase 2 calls
+  (HF-client SCO software path + AG to earbuds, or phone<->earbuds fallback),
+  remote-SUSPEND restart path, OsmAnd prompt ducking check, v9 image =
+  ~/images/RaspberryVanillaAOSP16-20260905-rpi5_motorcycle-v9.img.gz.
 
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
