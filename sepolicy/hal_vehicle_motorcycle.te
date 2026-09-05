@@ -26,3 +26,7 @@ allow hal_can_socketcan motodash_data_file:file create_file_perms;
 # Lean sensor (ISM330DHCX) + barometer (BMP280) on /dev/i2c-1, spoken to
 # directly with the I2C_RDWR ioctl (see vehicle_hal/imu/).
 allow hal_can_socketcan i2c_device:chr_file rw_file_perms;
+
+# Pi SoC temperature + pwm-fan level for Workshop (sysfs thermal, read only)
+allow hal_can_socketcan sysfs_thermal:dir r_dir_perms;
+allow hal_can_socketcan sysfs_thermal:file r_file_perms;

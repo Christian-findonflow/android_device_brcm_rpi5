@@ -186,6 +186,11 @@ constexpr int32_t VENDOR_RAW_GPIO = 0x2140006C;
 // gear lives in bits 4-5 of the same byte (0 P, 1 R, 2 N, 3 D) and the two
 // fields are independent: P with mode 3 selected reads 0x80.
 constexpr int32_t VENDOR_DRIVE_MODE = 0x2140006D;
+// The Pi itself: SoC temperature and the pwm-fan level, read from sysfs
+// thermal every 5 s so Workshop can keep an eye on the dash's own cooling.
+constexpr int32_t VENDOR_SOC_TEMP_C = 0x2160006F;      // float, degC
+constexpr int32_t VENDOR_SOC_FAN_LEVEL = 0x21400070;   // int, 0..VENDOR_SOC_FAN_MAX
+constexpr int32_t VENDOR_SOC_FAN_MAX = 0x21400071;     // int, cooling device max_state
 constexpr int32_t DRIVE_MODE_SPORT = 3;
 constexpr float CHARGING_CURRENT_THRESHOLD_A = -0.5f;
 
@@ -335,6 +340,8 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void checkLinkTimeouts(int64_t nowNs);
     void setLinkBit(int32_t bit, bool alive);
     void linkWatchdogThread();
+    // Pi SoC thermal (sysfs), polled from the watchdog thread; test-injectable paths.
+    void readSocThermal(int64_t nowNs);
     // Inertial sensing (imu thread): reads the sensors or the simulator
     // file at 100 Hz, runs the lean estimator, publishes VENDOR_LEAN_DEG
     // and friends, and services the Workshop Level command. See imu/.
@@ -523,6 +530,9 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int mImuAddr = 0x6A;
     int mBaroAddr = 0x77;
     std::string mImuSimPath = "/data/vendor/motodash/imu_sim";
+    std::string mThermalZonePath = "/sys/class/thermal/thermal_zone0/temp";
+    std::string mCoolingDevicePath = "/sys/class/thermal/cooling_device0";
+    int64_t mLastThermalReadNs = 0;
     // Raw IMU capture, tied to the CAN capture switch (VENDOR_CFG_CAN_CAPTURE);
     // imu thread only.
     imu::ImuLogWriter mImuLog;

@@ -545,6 +545,9 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addIntVendorProp(VENDOR_IMU_STATUS, 0);
     addIntVendorProp(VENDOR_RAW_GPIO, 0);
     addIntVendorProp(VENDOR_DRIVE_MODE, 0);
+    addFloatVendorProp(VENDOR_SOC_TEMP_C, -40.0f, 150.0f, 0.0f);
+    addIntVendorProp(VENDOR_SOC_FAN_LEVEL, 0);
+    addIntVendorProp(VENDOR_SOC_FAN_MAX, 0);
     {
         // Raw sensor axes for the Workshop mounting check: float[6].
         VehiclePropConfig config;
@@ -1632,8 +1635,46 @@ void MotorcycleVehicleHardware::checkLinkTimeouts(int64_t nowNs) {
 
 void MotorcycleVehicleHardware::linkWatchdogThread() {
     while (sleepUnlessStopping(500)) {
-        checkLinkTimeouts(elapsedRealtimeNano());
+        int64_t now = elapsedRealtimeNano();
+        checkLinkTimeouts(now);
+        readSocThermal(now);
     }
+}
+
+void MotorcycleVehicleHardware::readSocThermal(int64_t nowNs) {
+    constexpr int64_t kThermalPeriodNs = 5LL * 1000000000LL;
+    if (mLastThermalReadNs != 0 && nowNs - mLastThermalReadNs < kThermalPeriodNs) return;
+    mLastThermalReadNs = nowNs;
+    auto readInt = [](const std::string& path, long* out) {
+        std::ifstream f(path);
+        if (!f) return false;
+        f >> *out;
+        return !f.fail();
+    };
+    long milli = 0, level = 0, maxLevel = 0;
+    bool haveTemp = readInt(mThermalZonePath, &milli);
+    bool haveFan = readInt(mCoolingDevicePath + "/cur_state", &level);
+    bool haveMax = readInt(mCoolingDevicePath + "/max_state", &maxLevel);
+    if (!haveTemp && !haveFan) return;
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    if (haveTemp) {
+        auto& v = mCurrentValues[VENDOR_SOC_TEMP_C];
+        float t = milli / 1000.0f;
+        if (v.value.floatValues[0] != t) {
+            v.value.floatValues[0] = t;
+            v.timestamp = nowNs;
+            notifyPropertyChange(VENDOR_SOC_TEMP_C, v);
+        }
+    }
+    auto setI = [&](int32_t prop, int32_t val) {
+        auto& v = mCurrentValues[prop];
+        if (v.value.int32Values[0] == val && v.timestamp != 0) return;
+        v.value.int32Values[0] = val;
+        v.timestamp = nowNs;
+        notifyPropertyChange(prop, v);
+    };
+    if (haveFan) setI(VENDOR_SOC_FAN_LEVEL, static_cast<int32_t>(level));
+    if (haveMax) setI(VENDOR_SOC_FAN_MAX, static_cast<int32_t>(maxLevel));
 }
 
 void MotorcycleVehicleHardware::updateChargingState(int rpm, float current, int64_t nowNs) {

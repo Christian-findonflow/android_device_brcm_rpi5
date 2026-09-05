@@ -23,3 +23,6 @@ genfscon sysfs /devices/platform/soc/soc:rpi_rtc/wakeup/wakeup0                 
 
 # GPIO sysfs interface for turn signals and high beam
 genfscon sysfs /class/gpio  u:object_r:sysfs_gpio:s0
+
+# Thermal (plain "sysfs" on this kernel otherwise): SoC zone + pwm-fan cooling device
+genfscon sysfs /devices/virtual/thermal  u:object_r:sysfs_thermal:s0

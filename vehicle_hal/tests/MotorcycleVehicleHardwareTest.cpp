@@ -68,6 +68,11 @@ class MotorcycleVehicleHardwareTestPeer {
     }
     void setImuMounting(const imu::Mounting& m) { mHw->mLean.setMounting(m); }
     void setImuPresent() { mHw->mImuSourceBits = IMU_STATUS_PRESENT; }
+    void setThermalPaths(const std::string& zone, const std::string& cooling) {
+        mHw->mThermalZonePath = zone;
+        mHw->mCoolingDevicePath = cooling;
+    }
+    void readSocThermal(int64_t nowNs) { mHw->readSocThermal(nowNs); }
     const std::vector<VehiclePropConfig>& propertyConfigs() const { return mHw->mPropertyConfigs; }
     const VehiclePropValue& currentValue(int32_t prop) { return mHw->mCurrentValues[prop]; }
     void setLiveSpeed(float mps, int64_t ts) {
@@ -1372,6 +1377,39 @@ TEST_F(MotorcycleVehicleHardwareTest, PropertyIdTypeMatchesStoredValue) {
             ADD_FAILURE() << id << " has an unexpected value type nibble";
         }
     }
+}
+
+// Pi SoC temperature and fan level from sysfs thermal, for Workshop.
+TEST_F(MotorcycleVehicleHardwareTest, SocThermalPublishedFromSysfs) {
+    char dirTemplate[] = "/tmp/motodash-thermal-XXXXXX";
+    ASSERT_NE(mkdtemp(dirTemplate), nullptr);
+    std::string dir = dirTemplate;
+    ASSERT_EQ(mkdir((dir + "/cooling").c_str(), 0700), 0);
+    { std::ofstream(dir + "/temp") << "57300\n"; }
+    { std::ofstream(dir + "/cooling/cur_state") << "2\n"; }
+    { std::ofstream(dir + "/cooling/max_state") << "4\n"; }
+    mPeer->setThermalPaths(dir + "/temp", dir + "/cooling");
+    mPeer->readSocThermal(10LL * 1000000000LL);
+    auto t = lastEvent(VENDOR_SOC_TEMP_C);
+    ASSERT_TRUE(t.has_value());
+    EXPECT_NEAR(t->value.floatValues[0], 57.3f, 0.01f);
+    auto fan = lastEvent(VENDOR_SOC_FAN_LEVEL);
+    ASSERT_TRUE(fan.has_value());
+    EXPECT_EQ(fan->value.int32Values[0], 2);
+    auto mx = lastEvent(VENDOR_SOC_FAN_MAX);
+    ASSERT_TRUE(mx.has_value());
+    EXPECT_EQ(mx->value.int32Values[0], 4);
+    // Rate limited to 5 s: an immediate re-read with new values changes nothing.
+    { std::ofstream(dir + "/temp") << "61000\n"; }
+    clearEvents();
+    mPeer->readSocThermal(12LL * 1000000000LL);
+    EXPECT_FALSE(lastEvent(VENDOR_SOC_TEMP_C).has_value());
+    mPeer->readSocThermal(16LL * 1000000000LL);
+    t = lastEvent(VENDOR_SOC_TEMP_C);
+    ASSERT_TRUE(t.has_value());
+    EXPECT_NEAR(t->value.floatValues[0], 61.0f, 0.01f);
+    unlink((dir + "/temp").c_str()); unlink((dir + "/cooling/cur_state").c_str());
+    unlink((dir + "/cooling/max_state").c_str()); rmdir((dir + "/cooling").c_str()); rmdir(dir.c_str());
 }
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle
