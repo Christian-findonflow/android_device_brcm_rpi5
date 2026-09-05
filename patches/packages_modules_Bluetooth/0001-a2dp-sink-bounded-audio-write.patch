@@ -1,0 +1,105 @@
+diff --git a/system/btif/src/btif_avrcp_audio_track.cc b/system/btif/src/btif_avrcp_audio_track.cc
+index 066d5ba..d15c855 100644
+--- a/system/btif/src/btif_avrcp_audio_track.cc
++++ b/system/btif/src/btif_avrcp_audio_track.cc
+@@ -29,6 +29,8 @@
+ #include <algorithm>
+ #include <cstddef>
+ #include <cstdint>
++#include <chrono>
++#include <ctime>
+ #include <thread>
+ 
+ using namespace bluetooth;
+@@ -247,24 +249,82 @@ static size_t transcodeToPcmFloat(uint8_t* buffer, size_t length,
+   return -1;
+ }
+ 
+-constexpr int64_t kTimeoutNanos = 100 * 1000 * 1000;  // 100 ms
++// NEO dash (Raspberry Pi 5, no local audio output): the sink's PCM goes to
++// an AudioTrack whose output is a *second* Bluetooth link (the earbuds).  The
++// legacy AAudio path used on this HAL ignores the timeout argument of
++// AAudioStream_write() and blocks until every frame fits in the track buffer.
++// The buffer only drains once the earbud stream has started, and that start
++// needs the stack's main thread, which by then is parked on g_mutex in
++// btif_a2dp_sink_enqueue_buf() waiting for *this* worker.  The three-way wait
++// froze the whole stack for minutes on 2026-09-05.  Write without blocking,
++// give the consumer a short grace period, then drop what still does not fit:
++// a dropped frame costs a click, a blocked worker costs the radio.
++constexpr int64_t kWriteBudgetNanos = 20 * 1000 * 1000;  // 20 ms
++constexpr int64_t kWritePollNanos = 2 * 1000 * 1000;     // 2 ms
++constexpr int64_t kDropLogIntervalNanos = 1000 * 1000 * 1000;  // 1 s
++
++static int64_t monotonicNanos() {
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return static_cast<int64_t>(ts.tv_sec) * 1000000000LL + ts.tv_nsec;
++}
++
++// Writes |frames| frames from |data| without ever blocking for longer than
++// kWriteBudgetNanos.  Returns the number of frames written, or a negative
++// AAudio result.
++static int32_t writeBounded(AAudioStream* stream, const float* data, int32_t frames,
++                            int32_t channelCount) {
++  const int64_t deadline = monotonicNanos() + kWriteBudgetNanos;
++  int32_t written = 0;
++  while (written < frames) {
++    aaudio_result_t result = AAudioStream_write(stream, data + written * channelCount,
++                                                frames - written, 0 /* non-blocking */);
++    if (result < 0) {
++      return result;
++    }
++    written += result;
++    if (written >= frames || monotonicNanos() >= deadline) {
++      break;
++    }
++    std::this_thread::sleep_for(std::chrono::nanoseconds(kWritePollNanos));
++  }
++  return written;
++}
+ 
+ int BtifAvrcpAudioTrackWriteData(void* handle, void* audioBuffer, int bufferLength) {
+   BtifAvrcpAudioTrack* trackHolder = static_cast<BtifAvrcpAudioTrack*>(handle);
+   log::assert_that(trackHolder != NULL, "assert failed: trackHolder != NULL");
+   log::assert_that(trackHolder->stream != NULL, "assert failed: trackHolder->stream != NULL");
+-  aaudio_result_t retval = -1;
++  static int64_t s_lastDropLogNanos = 0;
++  static int64_t s_droppedFrames = 0;
+ 
+   size_t sampleSize = sampleSizeFor(trackHolder);
+   int transcodedCount = 0;
+   do {
+-    transcodedCount += transcodeToPcmFloat(((uint8_t*)audioBuffer) + transcodedCount,
+-                                           bufferLength - transcodedCount, trackHolder);
+-
+-    retval = AAudioStream_write(trackHolder->stream, trackHolder->buffer,
+-                                transcodedCount / (sampleSize * trackHolder->channelCount),
+-                                kTimeoutNanos);
+-    log::verbose("Track.cpp: btWriteData len = {} ret = {}", bufferLength, retval);
++    int chunkBytes = transcodeToPcmFloat(((uint8_t*)audioBuffer) + transcodedCount,
++                                         bufferLength - transcodedCount, trackHolder);
++    if (chunkBytes <= 0) {
++      break;
++    }
++    transcodedCount += chunkBytes;
++    const int32_t frames = chunkBytes / (sampleSize * trackHolder->channelCount);
++    const int32_t written =
++            writeBounded(trackHolder->stream, trackHolder->buffer, frames, trackHolder->channelCount);
++    if (written < 0) {
++      log::verbose("Track.cpp: btWriteData len = {} ret = {}", bufferLength, written);
++      break;
++    }
++    if (written < frames) {
++      s_droppedFrames += frames - written;
++      const int64_t now = monotonicNanos();
++      if (now - s_lastDropLogNanos >= kDropLogIntervalNanos) {
++        log::warn("output not draining: dropped {} frames since last report", s_droppedFrames);
++        s_lastDropLogNanos = now;
++        s_droppedFrames = 0;
++      }
++    }
++    log::verbose("Track.cpp: btWriteData len = {} frames = {} written = {}", bufferLength, frames,
++                 written);
+   } while (transcodedCount < bufferLength);
+ 
+   return transcodedCount;

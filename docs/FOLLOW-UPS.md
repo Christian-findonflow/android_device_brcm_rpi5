@@ -524,6 +524,48 @@ OsmAnd prompts. Findings and plan:
   earbuds do standard LC3, or calls stay phone<->earbuds with the dash doing
   caller ID + answer/decline only. MAP stays off (remote-SIM crash).
 
+### Phase 1 bench test, first attempt (2026-09-05 late evening) - root-caused
+
+Symptoms Christian saw with iPhone + AirPods both connected: music plays only
+when the phone takes the AirPods back; the Music screen shows the track but
+play/pause/skip do nothing; a call is placed but neither side hears anything.
+All three were one fault, proven from the HCI snoop log
+(`/data/misc/bluetooth/logs/btsnoop_hci.log.filtered`, parsed with
+scratchpad `snoop.py`/`snoop3.py`):
+
+- 22:32:50.583 the dash sent AVDTP START to the AirPods; they ACCEPTED at
+  22:32:50.810. The stack never processed the answer: the audio HAL's
+  BluetoothAudioPort stayed in STARTING ("start ... failure" every 4.5 s) so
+  the earbuds got no audio.
+- Everything else queued behind it for 6 min 13 s: the AirPods' own ACL
+  supervision-timeout disconnect (22:33:01, HCI) reached BTM only at 22:39:03;
+  the phone's SUSPEND/CLOSE/L2CAP disconnects (22:34:37-59) likewise; the
+  AVRCP pass-through presses from the Music screen never reached the radio and
+  used up all 16 transaction labels ("failed to find free transaction"); the
+  ATD dial sat in the queue >10 s so HeadsetClientStateMachine's outgoing-call
+  watchdog sent CHUP and Telecom reported the call REMOTE-disconnected.
+- Cause: `btif_a2dp_sink_enqueue_buf` (bt_main_thread) takes the sink
+  `g_mutex`; the sink worker holds the same mutex around
+  `BtifAvrcpAudioTrackWriteData` -> `AAudioStream_write`; the legacy AAudio
+  path ignores the timeout ("TODO add timeout to AudioTrack") and blocks
+  until the track buffer drains; the buffer only drains once the earbud A2DP
+  stream starts; that start needs bt_main_thread. Three-way wait. AOSP never
+  hits it because no AOSP device is A2DP sink and source at once.
+- Fix: patches/packages_modules_Bluetooth/0001 - non-blocking write with a
+  20 ms grace period, drop the remainder ("output not draining" warn, rate
+  limited). Local commit 5db0297 on branch neo-motorcycle of
+  packages/modules/Bluetooth (not a fork of ours - not pushed).
+- Calls, separately: the HF-client role in this stack has NO software SCO
+  path (`bta_hf_client_sco.cc` has none; only the AG side has the
+  `bluetooth.hfp.software_datapath` hooks). SCO to the phone opens but the
+  audio has nowhere to go on a Pi (no PCM wiring). Phase 2 needs either an
+  HF-client software datapath (port the AG-side hfp_client_interface use into
+  bta_hf_client + a Bluetooth audio HAL session) plus AG->earbuds, or the
+  "calls stay phone<->earbuds" fallback.
+- Also seen: the AirPods send AVRCP PAUSE to the dash (in-ear detection) -
+  the dash's AVRCP target must forward that to the phone's player, check once
+  Phase 1 passes.
+
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
 `UsbService.onSwitchUser` NPE on the android.fg thread at the user-10
