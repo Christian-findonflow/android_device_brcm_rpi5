@@ -62,6 +62,16 @@ TARGET_NO_RECOVERY := true
 BOARD_SEPOLICY_DIRS += device/brcm/rpi5/sepolicy
 BOARD_KERNEL_CMDLINE += androidboot.selinux=permissive
 
+# The motorcycle dash has no audio hardware of its own (no HDMI sink, no jack,
+# no mic): tell the AIDL audio HAL to back the primary "Speaker"/"Built-In Mic"
+# ports with its stub driver. Without this the HAL cannot open card 0 (vc4hdmi
+# with nothing attached), the policy manager never initialises, every audio
+# track fails, and the Bluetooth stack asserts the moment a phone streams
+# (2026-09-05). Real audio goes to Bluetooth earbuds via the bluetooth module.
+ifeq ($(TARGET_PRODUCT),aosp_rpi5_motorcycle)
+BOARD_KERNEL_CMDLINE += androidboot.audio.tinyalsa.ignore_output=true androidboot.audio.tinyalsa.simulate_input=true
+endif
+
 # Treble
 TARGET_COPY_OUT_VENDOR := vendor
 

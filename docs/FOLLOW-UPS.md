@@ -501,3 +501,25 @@ succeed but turns on more telephony behaviour than a bike wants.
 Also seen in the storm: `UsbService.onSwitchUser` NPE (the USB gadget HAL
 crashes at boot - tombstones on every boot) - only fatal during the crash
 storm's user switches, but the gadget HAL crash itself is a follow-up.
+
+## Audio hub (decided 2026-09-05): phone + earbuds both connect to the dash
+
+Christian: the dash will never have a physical audio output; the rider's
+earbuds pair to the DASH, which mixes and routes phone music, calls and
+OsmAnd prompts. Findings and plan:
+
+- Legacy audio routing (dynamic car routing off) - the platform routes like a
+  phone: media/nav go to a connected A2DP headset automatically.
+- The AIDL audio HAL already has the Bluetooth output module (A2DP source,
+  AAC) and the HFP AG software-path hook; A2DP source + AVRCP target are on.
+- Phase 0 (shipped): `androidboot.audio.tinyalsa.ignore_output/simulate_input`
+  on the motorcycle cmdline -> primary output = stub, so the policy always has
+  a default output; the Bluetooth A2DP-sink assert (AudioFlinger -19, "Speaker
+  unreachable", AudioPolicyManager 0x0) is gone and nav TTS no longer errors.
+- Phase 1 (bench): pair earbuds as output; verify music + nav in the helmet,
+  ducking, earbud buttons -> phone via AVRCP. Test first with AirPods Pro + iPhone
+  but keep it device-agnostic.
+- Phase 2 (calls): spike dual voice links (HF client to phone + AG to earbuds
+  with the Android 15 HFP software datapath); fallbacks: LE Audio if the
+  earbuds do standard LC3, or calls stay phone<->earbuds with the dash doing
+  caller ID + answer/decline only. MAP stays off (remote-SIM crash).
