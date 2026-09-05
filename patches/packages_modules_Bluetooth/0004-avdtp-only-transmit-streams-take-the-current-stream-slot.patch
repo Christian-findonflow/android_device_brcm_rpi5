@@ -1,0 +1,19 @@
+diff --git a/system/stack/avdt/avdt_scb.cc b/system/stack/avdt/avdt_scb.cc
+index 1e1d7ae..ae1cd09 100644
+--- a/system/stack/avdt/avdt_scb.cc
++++ b/system/stack/avdt/avdt_scb.cc
+@@ -772,7 +772,13 @@ void avdt_scb_event(AvdtpScb* p_scb, uint8_t event, tAVDT_SCB_EVT* p_data) {
+   for (int i = 0; i < AVDT_NUM_LINKS; i++) {
+     for (int j = 0; j < AVDT_NUM_SEPS; j++) {
+       AvdtpScb* p_avdt_scb = &avdtp_cb.ccb[i].scb[j];
+-      if (p_avdt_scb->allocated && avdt_scb_st_tbl[p_avdt_scb->state] == avdt_scb_st_stream) {
++      // NEO dash: the "one current stream" rule is about which of several
++      // TRANSMIT streams may send. A stream on which our local SEP is a
++      // sink (the phone playing into us) is streaming too, but it never
++      // transmits; counting it left the earbud stream without the transmit
++      // slot and every media packet was freed here (2026-09-05).
++      if (p_avdt_scb->allocated && avdt_scb_st_tbl[p_avdt_scb->state] == avdt_scb_st_stream &&
++          p_avdt_scb->stream_config.tsep == AVDT_TSEP_SRC) {
+         num_st_streams++;
+         ccb_index = i;
+         scb_index = j;

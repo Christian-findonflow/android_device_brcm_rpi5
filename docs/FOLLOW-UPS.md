@@ -592,6 +592,18 @@ scratchpad `snoop.py`/`snoop3.py`):
   loads the shared radio - use on-device grep, never stream full logcat).
   Options if the earbud link stays weak: role switch to central on the phone
   link (one piconet), lower AAC bitrate to the earbuds, Wi-Fi off on the bike.
+- Fourth fault (found with 0003 in): the dash is actually CENTRAL on both
+  links (one piconet, no scatternet), the live sink track in AudioFlinger was
+  full and healthy, yet zero media packets left for the earbuds: AVDTP's
+  one-current-stream rule (`avdt_scb_event`, "ignore
+  AVDT_SCB_API_WRITE_REQ_EVT") counted the phone->us stream as a competing
+  transmit stream. The earbuds got silence and sent a remote SUSPEND after
+  3 s. Fix: patches/packages_modules_Bluetooth/0004. Also seen: after a
+  remote SUSPEND the audio HAL's Bluetooth port stays STARTED and every
+  write overflows ("Data 0/512 overflow 1000 ms") until the output goes to
+  standby - on a phone the app pauses; here the phone keeps streaming. Needs
+  a restart path (re-START the earbud stream while our sink is live, or tell
+  the HAL port it is suspended) - open.
 
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
