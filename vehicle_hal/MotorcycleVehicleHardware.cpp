@@ -544,6 +544,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addFloatVendorProp(VENDOR_IMU_TEMP_C, -50.0f, 150.0f, 0.0f);
     addIntVendorProp(VENDOR_IMU_STATUS, 0);
     addIntVendorProp(VENDOR_RAW_GPIO, 0);
+    addIntVendorProp(VENDOR_DRIVE_MODE, 0);
     {
         // Raw sensor axes for the Workshop mounting check: float[6].
         VehiclePropConfig config;
@@ -903,7 +904,14 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
     
     int errors = data[0];
     int statusAndGear = data[1];
-    int gearRaw = (statusAndGear >> 4) & 0x0F;  // Bits 4-7 for gear
+    // Byte 1 high nibble = gear (bits 4-5) + ride mode (bits 6-7); confirmed
+    // on the bike 2026-09-05 (P 00, R 10, D 30, D+mode2 70, D+mode3 B0,
+    // D+Sport F0, P+mode3 80). Mask the mode out before the gear map.
+    // The Workshop gear base (spec ambiguity, 1=P..4=D firmware) shifts the
+    // nibble before the split; 0 on this bike.
+    int nibble = ((statusAndGear >> 4) - mGearBase.load(std::memory_order_relaxed)) & 0x0F;
+    int gearRaw = nibble & 0x03;
+    int driveMode = (nibble >> 2) & 0x03;
     int rpm = data[2] | (data[3] << 8);
     int voltageRaw = data[4] | (data[5] << 8);
     float voltage = voltageRaw * 0.1f;
@@ -911,9 +919,8 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
     int16_t currentRaw = static_cast<int16_t>(data[6] | (data[7] << 8));
     float current = currentRaw * 0.1f;
     
-    // Map gear: 00=P(0), 01=R(1), 10=N(2), 11=D(3), shifted by the
-    // configurable base (spec ambiguity: some firmware reports 1=P..4=D).
-    int gear = gearRaw - mGearBase.load(std::memory_order_relaxed);
+    // Map gear: 00=P(0), 01=R(1), 10=N(2), 11=D(3).
+    int gear = gearRaw;
     
     // Frame dump, gated: at 20Hz this alone is ~2 lines/s in logcat
     static int statusMsgCount = 0;
@@ -954,6 +961,16 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
     setLinkBit(LINK_CONTROLLER, true);
     updateFaultFlags(errors, FAULT_MASK_CONTROLLER_STATUS);
     updateStatusFlags(statusAndGear & 0x0F);
+    {
+        std::lock_guard<std::mutex> lock(mValuesMutex);
+        auto& mode = mCurrentValues[VENDOR_DRIVE_MODE];
+        if (mode.value.int32Values[0] != driveMode) {
+            mode.value.int32Values[0] = driveMode;
+            mode.timestamp = timestamp;
+            notifyPropertyChange(VENDOR_DRIVE_MODE, mode);
+            LOG(INFO) << "Ride mode changed: " << driveMode << (driveMode == DRIVE_MODE_SPORT ? " (Sport)" : "");
+        }
+    }
     {
         constexpr int64_t kBmsCurrentFreshNs = 5LL * 1000000000LL;
         bool bmsFresh = mLastBmsCurrentNs != 0 && (timestamp - mLastBmsCurrentNs) < kBmsCurrentFreshNs;

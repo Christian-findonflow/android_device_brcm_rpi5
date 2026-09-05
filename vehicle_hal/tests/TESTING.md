@@ -314,8 +314,12 @@ gear/mode/throttle sequence. Facts now built into the HAL:
   the charge current limit (27 A). SoC/current/voltage are NOT broadcast.
 - **The BMS answers OBD2 on 0x7E3 -> 0x7EB** (Orion's second pair), never on
   0x7E0. PID 0xF00F gave 96.5 %, 0xF00D 85.6 V with the 21s pack at 4.11 V/cell.
-- Controller status frame: byte 1 gear/status is a bitfield in the high
-  nibble (values 00, 10, 30, 70, B0, F0 seen; low nibble 2 = brake), current
+- Controller status frame byte 1, mapped with a guided sequence: high nibble =
+  gear in bits 4-5 (0 P, 1 R, 3 D; N presumably 2) + ride mode in bits 6-7
+  (00 mode 1, 01 mode 2, 10 mode 3, 11 Sport/boost while the S button is
+  held). The fields are independent (P with mode 3 selected reads 80). Low
+  nibble bit 1 = brake. VENDOR_DRIVE_MODE publishes the mode; the cluster
+  shows "MODE n" / "SPORT" under the gear. Current
   (bytes 6-7) is signed, + = discharge, and reads **-1.7 A at rest** (sensor
   offset; the BMS current via 0xF00C is the trustworthy one). Temps frame
   byte 4 = throttle % (0..43 during a blip).

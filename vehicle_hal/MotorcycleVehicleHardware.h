@@ -181,6 +181,12 @@ constexpr int32_t IMU_STATUS_LEVEL_FAILED = 1 << 6;
 // turn, bit1 right turn, bit2 high beam (electrical level, before the
 // active-low logic); bit3..5 = the corresponding line is configured.
 constexpr int32_t VENDOR_RAW_GPIO = 0x2140006C;
+// Ride mode from the controller status byte (bits 6-7 of byte 1, mapped on
+// the bike 2026-09-05): 0 = mode 1, 1 = mode 2, 2 = mode 3, 3 = Sport. The
+// gear lives in bits 4-5 of the same byte (0 P, 1 R, 2 N, 3 D) and the two
+// fields are independent: P with mode 3 selected reads 0x80.
+constexpr int32_t VENDOR_DRIVE_MODE = 0x2140006D;
+constexpr int32_t DRIVE_MODE_SPORT = 3;
 constexpr float CHARGING_CURRENT_THRESHOLD_A = -0.5f;
 
 // Fault flags from the controller, combined into one bitfield so the UI needs

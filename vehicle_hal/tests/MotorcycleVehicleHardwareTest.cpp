@@ -1278,4 +1278,39 @@ TEST_F(MotorcycleVehicleHardwareTest, ImuCaptureFollowsTheCanCaptureSwitch) {
     rmdir(dir.c_str());
 }
 
+// Controller status byte 1 as mapped on the bike 2026-09-05: gear in bits
+// 4-5, ride mode in bits 6-7, independent of each other.
+TEST_F(MotorcycleVehicleHardwareTest, GearAndRideModeShareTheStatusNibble) {
+    struct Case { uint8_t byte1; int gear; int mode; };
+    const Case cases[] = {
+            {0x00, static_cast<int>(VehicleGear::GEAR_PARK), 0},
+            {0x10, static_cast<int>(VehicleGear::GEAR_REVERSE), 0},
+            {0x30, static_cast<int>(VehicleGear::GEAR_DRIVE), 0},
+            {0x70, static_cast<int>(VehicleGear::GEAR_DRIVE), 1},
+            {0xB0, static_cast<int>(VehicleGear::GEAR_DRIVE), 2},
+            {0xF0, static_cast<int>(VehicleGear::GEAR_DRIVE), DRIVE_MODE_SPORT},
+            {0x80, static_cast<int>(VehicleGear::GEAR_PARK), 2},
+            {0x32, static_cast<int>(VehicleGear::GEAR_DRIVE), 0},   // brake bit in the low nibble
+    };
+    for (const auto& c : cases) {
+        // Gear and mode publish on change only, so lastEvent() carries over
+        // between cases whose value is unchanged - which is what we assert.
+        mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                         {0x00, c.byte1, 0x00, 0x00, 0x5F, 0x03, 0xEF, 0xFF}));
+        auto gear = lastEvent(PROP_CURRENT_GEAR);
+        ASSERT_TRUE(gear.has_value()) << "byte1 " << (int)c.byte1;
+        EXPECT_EQ(gear->value.int32Values[0], c.gear) << "byte1 " << (int)c.byte1;
+        auto mode = lastEvent(VENDOR_DRIVE_MODE);
+        if (mode.has_value()) {
+            EXPECT_EQ(mode->value.int32Values[0], c.mode) << "byte1 " << (int)c.byte1;
+        } else {
+            EXPECT_EQ(c.mode, 0) << "no mode event for byte1 " << (int)c.byte1;
+        }
+    }
+    // The brake bit reaches STATUS_FLAGS.
+    auto flags = lastEvent(VENDOR_STATUS_FLAGS);
+    ASSERT_TRUE(flags.has_value());
+    EXPECT_NE(flags->value.int32Values[0] & STATUS_BRAKE, 0);
+}
+
 }  // namespace android::hardware::automotive::vehicle::motorcycle
