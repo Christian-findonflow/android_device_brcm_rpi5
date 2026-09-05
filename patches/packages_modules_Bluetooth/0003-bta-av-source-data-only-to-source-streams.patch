@@ -1,0 +1,35 @@
+diff --git a/system/bta/av/bta_av_aact.cc b/system/bta/av/bta_av_aact.cc
+index 7cf03c3..adbd5d1 100644
+--- a/system/bta/av/bta_av_aact.cc
++++ b/system/bta/av/bta_av_aact.cc
+@@ -2111,6 +2111,16 @@ void bta_av_data_path(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* /* p_data */) {
+     return;
+   }
+ 
++  // NEO dash: with the source and sink profiles both enabled, a stream on
++  // which WE are the sink (the phone playing into us) is "started" too, and
++  // bta_av_ci_data() hands it the source data-ready event like any other
++  // audio stream. It must never pull encoded frames from our encoder or push
++  // them at the phone: on 2026-09-05 the dash sent the earbud stream to the
++  // phone at full rate while the earbuds themselves were starved.
++  if (p_scb->seps[p_scb->sep_idx].tsep != AVDT_TSEP_SRC) {
++    return;
++  }
++
+   if (p_scb->cong) {
+     return;
+   }
+diff --git a/system/bta/av/bta_av_main.cc b/system/bta/av/bta_av_main.cc
+index 54678f0..655713e 100644
+--- a/system/bta/av/bta_av_main.cc
++++ b/system/bta/av/bta_av_main.cc
+@@ -1026,6 +1026,9 @@ void bta_av_dup_audio_buf(tBTA_AV_SCB* p_scb, BT_HDR* p_buf) {
+     if ((p_scbi == NULL) || !p_scbi->co_started) {
+       continue; /* Ignore if SCB is not used or started */
+     }
++    if (p_scbi->seps[p_scbi->sep_idx].tsep != AVDT_TSEP_SRC) {
++      continue; /* NEO dash: we are the sink on this stream (phone -> us) */
++    }
+     if (!(bta_av_cb.conn_audio & BTA_AV_HNDL_TO_MSK(i))) {
+       continue; /* Audio is not connected */
+     }

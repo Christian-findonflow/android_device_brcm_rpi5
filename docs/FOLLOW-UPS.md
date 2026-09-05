@@ -576,6 +576,22 @@ scratchpad `snoop.py`/`snoop3.py`):
   patches/packages_modules_Bluetooth/0002 (AVCT_GetPeerAddr + skip other
   peers' connections). AOSP's coexist code was written for one peer changing
   role, not two peers in different roles.
+- Third fault, same retest: with 0001+0002 the phone stayed active, the
+  earbud stream started 0.8 s after the phone's, AVRCP replies came back -
+  but the earbuds lost their link after 10 s (reason 8) and the sink dropped
+  10-40 % of frames. Snoop: 43 media packets/s TX to the PHONE's link, ~1/s to
+  the earbuds. `bta_av_ci_data` hands BTA_AV_SRC_DATA_READY_EVT to every
+  started audio stream; the phone->us sink stream is started too, so its SCB
+  pulled frames from our encoder and sent them to the phone, duplicating to
+  the earbuds only as a copy that the starved link never drained. Fix:
+  patches/packages_modules_Bluetooth/0003 (skip streams whose local SEP is
+  not SRC in bta_av_data_path and bta_av_dup_audio_buf).
+- Still to characterise after 0003: earbud link throughput. The dash is
+  peripheral on the phone link and central on the earbud link (scatternet on
+  a CYW43455), plus Wi-Fi coexistence (adb/logcat over Wi-Fi during tests
+  loads the shared radio - use on-device grep, never stream full logcat).
+  Options if the earbud link stays weak: role switch to central on the phone
+  link (one piconet), lower AAC bitrate to the earbuds, Wi-Fi off on the bike.
 
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
