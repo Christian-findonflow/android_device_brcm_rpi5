@@ -23,4 +23,6 @@ echo "   ctrl temp $(g 291504897) C   motor temp $(g 291504900) C   throttle $(g
 echo "   IMU status $(g 557842535)   capture $(g 557842502)"
 echo "-- HAL log (last 8 relevant lines)"
 $B logcat -d -s MotorcycleVehicleHardware 2>/dev/null | tr -d '\r' | grep -iE "link|controller|bms|frame|error|fail|GPIO|Turn|beam|capture|IMU" | tail -8 | cut -c1-150 | sed 's/^/   /'
+echo "-- power: undervoltage events (firmware) / SoC temp"
+$B shell "dmesg | grep -ciE 'undervoltage|under-voltage' ; cat /sys/class/hwmon/hwmon*/in0_lcrit_alarm 2>/dev/null | head -1; cat /sys/class/thermal/thermal_zone0/temp" | tr -d '\r' | tr '\n' ' ' | sed 's/^/   undervoltage msgs, lcrit_alarm, milli-degC: /'; echo
 echo "-- health: tombstones $($B shell 'ls /data/tombstones 2>/dev/null | wc -l' | tr -d '\r ')   vhal $($B shell 'getprop init.svc.vendor.vehicle-hal-motorcycle' | tr -d '\r')"
