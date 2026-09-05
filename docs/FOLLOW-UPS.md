@@ -475,3 +475,29 @@ Open:
 - **Runtime VHAL restart kills the cockpit** (see above) - relaunch needed.
 - **cf simulator** still carries the old HAL/sim (0x7E0); rebuild before the
   next e2e run.
+
+## Bluetooth phone connection took the bike down (2026-09-05, root-caused)
+
+Symptom: ~5 s after the phone connected the dash reset and then sat on the
+NEO logo at every boot; a reflash cured it, `dtoverlay=disable-bt` did not.
+UART console + `logcat -b crash` showed system_server dying every 5 s in
+`NetworkPolicyManagerService.updateSubscriptions ->
+TelephonyManager.getMergedImsisFromGroup`: "unsupported without
+android.hardware.telephony.subscription". Trigger: the Bluetooth MAP client
+(message access) registers the phone as a REMOTE_SIM subscription
+(`MapClientContent.addSubscriptionInfoRecord`), which is persisted in
+telephony.db, so the crash loop survives reboots and Bluetooth being off.
+This image ships the telephony stack (TelephonyProvider, phone process)
+but declares no telephony features, so the feature-enforced API throws
+inside system_server.
+
+Fix shipped: `bluetooth.profile.map.client.enabled=false` (we removed the
+messaging app; MAP has no consumer). Recovery without reflash: delete the
+remote SIM row (`sqlite3 .../telephony.db "delete from siminfo where
+subscription_type=1"`) and reboot. Belt-and-braces option not taken:
+declaring android.hardware.telephony.subscription would make the call
+succeed but turns on more telephony behaviour than a bike wants.
+
+Also seen in the storm: `UsbService.onSwitchUser` NPE (the USB gadget HAL
+crashes at boot - tombstones on every boot) - only fatal during the crash
+storm's user switches, but the gadget HAL crash itself is a follow-up.
