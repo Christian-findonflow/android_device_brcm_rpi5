@@ -140,6 +140,7 @@ class MotorcycleVehicleHardwareTest : public ::testing::Test {
         property_set("persist.vendor.motodash.cfg.units_temp", "");
         property_set("persist.vendor.motodash.cfg.can_capture", "");
         property_set("persist.vendor.motodash.cfg.gear_base", "");
+        property_set("persist.vendor.motodash.cfg.pack_max_v", "");
         property_set("persist.vendor.motodash.imu.up", "");
         property_set("persist.vendor.motodash.imu.fwd", "");
         // Nonexistent interface: the reader thread stays in its retry loop and
@@ -1311,6 +1312,36 @@ TEST_F(MotorcycleVehicleHardwareTest, GearAndRideModeShareTheStatusNibble) {
     auto flags = lastEvent(VENDOR_STATUS_FLAGS);
     ASSERT_TRUE(flags.has_value());
     EXPECT_NE(flags->value.int32Values[0] & STATUS_BRAKE, 0);
+}
+
+// The controller flags over-voltage on a full 21s pack (86.3 V); only a pack
+// above its configured ceiling counts as a fault.
+TEST_F(MotorcycleVehicleHardwareTest, OverVoltageFlagGatedByPackCeiling) {
+    // Status frame: 86.3 V (0x035F LE at bytes 4-5), then temps frame with bit 1 of byte 6.
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x00, 0x00, 0x00, 0x5F, 0x03, 0xEF, 0xFF}));
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_TEMPS, true,
+                                     {0x20, 0x13, 0x00, 0x05, 0x00, 0x00, 0x02, 0x00}));
+    auto faults = lastEvent(VENDOR_FAULT_FLAGS);
+    EXPECT_FALSE(faults.has_value() && (faults->value.int32Values[0] & FAULT_OVER_VOLTAGE));
+
+    // 90.0 V (0x0384) is above the 89.25 V default: now it is a fault.
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_STATUS, true,
+                                     {0x00, 0x00, 0x00, 0x00, 0x84, 0x03, 0x00, 0x00}));
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_TEMPS, true,
+                                     {0x20, 0x13, 0x00, 0x05, 0x00, 0x00, 0x02, 0x00}));
+    faults = lastEvent(VENDOR_FAULT_FLAGS);
+    ASSERT_TRUE(faults.has_value());
+    EXPECT_NE(faults->value.int32Values[0] & FAULT_OVER_VOLTAGE, 0);
+
+    // Raising the ceiling from the Workshop clears it on the next frame.
+    ASSERT_EQ(mPeer->applyConfigValue(makeFloatValue(VENDOR_CFG_PACK_MAX_VOLTAGE, 92.0f)),
+              StatusCode::OK);
+    mPeer->processCanFrame(makeFrame(CAN_ID_CONTROLLER_TEMPS, true,
+                                     {0x20, 0x13, 0x00, 0x05, 0x00, 0x00, 0x02, 0x00}));
+    faults = lastEvent(VENDOR_FAULT_FLAGS);
+    ASSERT_TRUE(faults.has_value());
+    EXPECT_EQ(faults->value.int32Values[0] & FAULT_OVER_VOLTAGE, 0);
 }
 
 }  // namespace android::hardware::automotive::vehicle::motorcycle

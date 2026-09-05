@@ -231,6 +231,13 @@ constexpr int32_t VENDOR_CFG_GPIO_ACTIVE_LOW = 0x21400038;   // 0/1 (applies liv
 // Usable pack energy in Wh. Drives the RANGE_REMAINING estimate and is
 // mirrored into INFO_EV_BATTERY_CAPACITY. Applies live.
 constexpr int32_t VENDOR_CFG_PACK_ENERGY_WH = 0x21600039;
+// Pack full-charge ceiling, V. The 72 V-class controller flags "over
+// voltage" whenever the 21s pack is full (86.3 V, 2026-09-05); that bit is
+// only honoured when the measured pack voltage exceeds this. Default 21s x
+// 4.25 V. Applies live.
+constexpr int32_t VENDOR_CFG_PACK_MAX_VOLTAGE = 0x2160003A;
+constexpr float CFG_MIN_PACK_MAX_VOLTAGE = 20.0f;
+constexpr float CFG_MAX_PACK_MAX_VOLTAGE = 200.0f;
 
 // Validation limits for writable configuration
 constexpr float CFG_MIN_WHEEL_CIRCUMFERENCE_M = 0.5f;
@@ -439,6 +446,8 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     // Samsung 35E 21s20p: 75.6V nominal x 70Ah = 5292Wh. Configurable via
     // VENDOR_CFG_PACK_ENERGY_WH; kept in sync with INFO_EV_BATTERY_CAPACITY.
     std::atomic<float> mPackEnergyWh{5292.0f};
+    std::atomic<float> mPackMaxVoltage{89.25f};
+    std::atomic<float> mLastPackVoltage{0.0f};
 
     // Display units (standard *_DISPLAY_UNITS properties). Pure pass-through
     // settings: the settings UI writes them, every display surface (cluster,

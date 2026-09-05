@@ -711,6 +711,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     // settings on the fly so a first-ride discrepancy needs no rebuild.
     addConfigProp(VENDOR_CFG_GEAR_BASE, false, 0.0f, mGearBase.load());
     addConfigProp(VENDOR_CFG_IMU_LEVEL, false, 0.0f, 0);
+    addConfigProp(VENDOR_CFG_PACK_MAX_VOLTAGE, true, mPackMaxVoltage.load(), 0);
 
     // Standard display-unit properties. configArray lists the supported
     // VehicleUnit values, as the property docs require.
@@ -915,6 +916,7 @@ void MotorcycleVehicleHardware::processControllerStatus(const uint8_t* data) {
     int rpm = data[2] | (data[3] << 8);
     int voltageRaw = data[4] | (data[5] << 8);
     float voltage = voltageRaw * 0.1f;
+    mLastPackVoltage.store(voltage, std::memory_order_relaxed);
     // Current is signed 16-bit (negative = regen/charging, positive = discharge)
     int16_t currentRaw = static_cast<int16_t>(data[6] | (data[7] << 8));
     float current = currentRaw * 0.1f;
@@ -1076,6 +1078,12 @@ void MotorcycleVehicleHardware::processControllerTemps(const uint8_t* data) {
     int motorTemp = data[1];
     int throttle = data[4];  // Byte 4, not byte 2!
     int tempErrors = data[6];
+    // Over-voltage (bit 1) is the controller's view of the world; ours is
+    // the pack's full-charge ceiling. A full 21s pack is not a fault.
+    if ((tempErrors & 0x02) &&
+        mLastPackVoltage.load(std::memory_order_relaxed) <= mPackMaxVoltage.load(std::memory_order_relaxed)) {
+        tempErrors &= ~0x02;
+    }
 
     static int tempsMsgCount = 0;
     if (mVerboseCanLog && ++tempsMsgCount % 10 == 1) {
@@ -2114,6 +2122,16 @@ StatusCode MotorcycleVehicleHardware::applyConfigValue(const VehiclePropValue& v
             }
             break;
         }
+        case VENDOR_CFG_PACK_MAX_VOLTAGE: {
+            float v;
+            if (!floatArg(CFG_MIN_PACK_MAX_VOLTAGE, CFG_MAX_PACK_MAX_VOLTAGE, &v)) {
+                return StatusCode::INVALID_ARG;
+            }
+            mPackMaxVoltage = v;
+            persistConfig("persist.vendor.motodash.cfg.pack_max_v", std::to_string(v));
+            LOG(INFO) << "Pack max voltage set to " << v << " V";
+            break;
+        }
         case VENDOR_CFG_GPIO_ACTIVE_LOW: {
             int32_t v;
             if (!intArg(0, 1, &v)) return StatusCode::INVALID_ARG;
@@ -2422,6 +2440,10 @@ void MotorcycleVehicleHardware::loadConfig() {
                         "vendor.motodash.debug.* properties, not real GPIO";
     }
 
+    if (property_get("persist.vendor.motodash.cfg.pack_max_v", propValue, "") > 0) {
+        float v = strtof(propValue, nullptr);
+        if (v >= CFG_MIN_PACK_MAX_VOLTAGE && v <= CFG_MAX_PACK_MAX_VOLTAGE) mPackMaxVoltage = v;
+    }
     // Inertial sensing: bus/address overrides and the persisted calibration.
     if (property_get("persist.vendor.motodash.imu.i2c", propValue, "") > 0) {
         mImuI2cPath = propValue;
