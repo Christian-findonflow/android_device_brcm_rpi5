@@ -698,7 +698,9 @@ Boot race found on the same morning: CarService's early-startup entry for
 `HomeCockpitLauncherService` used `bind=start`; startService() at unlock
 throws BackgroundServiceStartNotAllowedException when the launcher uid is
 momentarily background, and CarService restarted 3x. Now `bind=bind` and the
-service launches the cockpit from onCreate(). Also seen at every boot: one
+service launches the cockpit from onCreate() - verified 09:34: clean boot,
+CarService up since boot, cockpit resumed (the service gets created twice at
+unlock and launches the singleTask cockpit twice; harmless). Also seen at every boot: one
 SystemUI `DeadSystemException` on wmshell.main (SystemUI restarts once during
 boot) - not investigated, cosmetic so far.
 
