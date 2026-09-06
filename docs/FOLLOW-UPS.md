@@ -636,6 +636,22 @@ scratchpad `snoop.py`/`snoop3.py`):
   remote-SUSPEND restart path, OsmAnd prompt ducking check, v9 image =
   ~/images/RaspberryVanillaAOSP16-20260905-rpi5_motorcycle-v9.img.gz.
 
+## Nav prompts: no speech engine on the dash (found 2026-09-06 00:35)
+
+Christian started a route in OsmAnd with music playing and heard nothing.
+Two reasons, neither the audio path: (1) no GPS yet, so no manoeuvre is ever
+reached and OsmAnd never speaks; (2) the image has NO text-to-speech engine
+(`pm list packages` shows no tts package, `tts_default_synth` is null), so an
+OsmAnd "TTS" voice can never speak either. To test prompts and ducking before
+the GPS is fitted: pick a RECORDED voice in OsmAnd (Navigation settings ->
+Voice prompts -> Voice guidance -> a recorded "en" voice, downloaded over
+Wi-Fi), enable the "OsmAnd development" plugin and use its "Simulate your
+position" while a route is active. For production either ship a TTS engine
+in the image (eSpeak-NG or a Sherpa/Piper-based engine; AOSP has none) or
+standardise on recorded voices. The sink handler's focus behaviour is AOSP
+car standard: MAY_DUCK prompts duck the phone's music via the track gain,
+TRANSIENT focus (assistant/phone) pauses the phone over AVRCP.
+
 ## Phase 2 scoping: call audio through the dash (written 2026-09-06 00:15)
 
 What exists today, from the code (packages/modules/Bluetooth, device audio HAL):
