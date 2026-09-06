@@ -1,0 +1,203 @@
+diff --git a/core/res/res/layout-car/car_alert_dialog_button_bar.xml b/core/res/res/layout-car/car_alert_dialog_button_bar.xml
+index 43fd1eb4c..da76194b7 100644
+--- a/core/res/res/layout-car/car_alert_dialog_button_bar.xml
++++ b/core/res/res/layout-car/car_alert_dialog_button_bar.xml
+@@ -36,34 +36,34 @@
+         <Button
+             android:id="@+id/button3"
+             style="@style/CarDialogButtonText"
+-            android:minWidth="@dimen/car_touch_target_size"
++            android:minWidth="80dp"
+             android:paddingStart="@dimen/car_padding_2"
+             android:paddingEnd="@dimen/car_padding_2"
+             android:background="@drawable/car_dialog_button_background"
+             android:layout_marginRight="@dimen/button_end_margin"
+             android:layout_width="wrap_content"
+-            android:layout_height="@dimen/button_layout_height" />
++            android:layout_height="40dp" />
+ 
+         <Button
+             android:id="@+id/button2"
+             style="@style/CarDialogButtonText"
+-            android:minWidth="@dimen/car_touch_target_size"
++            android:minWidth="80dp"
+             android:paddingStart="@dimen/car_padding_2"
+             android:paddingEnd="@dimen/car_padding_2"
+             android:background="@drawable/car_dialog_button_background"
+             android:layout_marginRight="@dimen/button_end_margin"
+             android:layout_width="wrap_content"
+-            android:layout_height="@dimen/button_layout_height" />
++            android:layout_height="40dp" />
+ 
+         <Button
+             android:id="@+id/button1"
+             style="@style/CarDialogButtonText"
+-            android:minWidth="@dimen/car_touch_target_size"
++            android:minWidth="80dp"
+             android:paddingStart="@dimen/car_padding_2"
+             android:paddingEnd="@dimen/car_padding_2"
+             android:background="@drawable/car_dialog_button_background"
+             android:layout_width="wrap_content"
+-            android:layout_height="@dimen/button_layout_height" />
++            android:layout_height="40dp" />
+         <Space
+             android:id="@+id/spacer"
+             android:layout_width="0dp"
+diff --git a/core/res/res/values/dimens_car.xml b/core/res/res/values/dimens_car.xml
+index 99377ffd5..fa7e18ffe 100644
+--- a/core/res/res/values/dimens_car.xml
++++ b/core/res/res/values/dimens_car.xml
+@@ -16,54 +16,55 @@
+ */
+ -->
+ <resources>
+-    <dimen name="car_large_avatar_size">96dp</dimen>
+-    <dimen name="car_large_avatar_badge_size">24dp</dimen>
++    <!-- Modified for 800x480 motorcycle dashboard screen -->
++    <dimen name="car_large_avatar_size">64dp</dimen>
++    <dimen name="car_large_avatar_badge_size">16dp</dimen>
+     <!-- Application Bar -->
+-    <dimen name="car_app_bar_height">80dp</dimen>
++    <dimen name="car_app_bar_height">56dp</dimen>
+     <!-- Margin -->
+-    <dimen name="car_margin">20dp</dimen>
++    <dimen name="car_margin">12dp</dimen>
+     <!-- Lists -->
+-    <dimen name="car_single_line_list_item_height">96dp</dimen>
++    <dimen name="car_single_line_list_item_height">56dp</dimen>
+     <dimen name="car_double_line_list_item_height">@dimen/car_single_line_list_item_height</dimen>
+     <dimen name="car_list_divider_height">1dp</dimen>
+     <!-- The diff between keyline 1 and keyline 3. -->
+     <dimen name="car_keyline_1_keyline_3_diff">88dp</dimen>
+     <dimen name="car_dialog_action_bar_height">@dimen/car_card_action_bar_height</dimen>
+ 
+-    <!-- Text size for car -->
+-    <dimen name="car_title_size">32sp</dimen>
+-    <dimen name="car_title2_size">32sp</dimen>
+-    <dimen name="car_headline1_size">45sp</dimen>
+-    <dimen name="car_headline2_size">32sp</dimen>
+-    <dimen name="car_headline3_size">24sp</dimen>
+-    <dimen name="car_headline4_size">20sp</dimen>
+-    <dimen name="car_body1_size">32sp</dimen>
+-    <dimen name="car_body2_size">28sp</dimen>
+-    <dimen name="car_body3_size">26sp</dimen>
+-    <dimen name="car_body4_size">24sp</dimen>
++    <!-- Text size for car - reduced for 800x480 screen -->
++    <dimen name="car_title_size">20sp</dimen>
++    <dimen name="car_title2_size">20sp</dimen>
++    <dimen name="car_headline1_size">24sp</dimen>
++    <dimen name="car_headline2_size">20sp</dimen>
++    <dimen name="car_headline3_size">18sp</dimen>
++    <dimen name="car_headline4_size">16sp</dimen>
++    <dimen name="car_body1_size">18sp</dimen>
++    <dimen name="car_body2_size">16sp</dimen>
++    <dimen name="car_body3_size">15sp</dimen>
++    <dimen name="car_body4_size">14sp</dimen>
+     <!-- car_body5_size is deprecated -->
+-    <dimen name="car_body5_size">18sp</dimen>
+-    <dimen name="car_label1_size">26sp</dimen>
+-    <dimen name="car_label2_size">64sp</dimen>
+-    <dimen name="car_action1_size">26sp</dimen>
+-    <dimen name="car_action2_size">26sp</dimen>
+-
+-    <!-- Common icon size for car app -->
+-    <dimen name="car_icon_size">56dp</dimen>
+-    <dimen name="car_primary_icon_size">44dp</dimen>
+-    <dimen name="car_secondary_icon_size">36dp</dimen>
+-
+-    <dimen name="car_card_header_height">76dp</dimen>
+-    <dimen name="car_card_action_bar_height">76dp</dimen>
+-
+-    <!-- Paddings -->
+-    <dimen name="car_padding_0">4dp</dimen>
+-    <dimen name="car_padding_1">8dp</dimen>
+-    <dimen name="car_padding_2">16dp</dimen>
+-    <dimen name="car_padding_3">24dp</dimen>
+-    <dimen name="car_padding_4">32dp</dimen>
+-    <dimen name="car_padding_5">64dp</dimen>
+-    <dimen name="car_padding_6">96dp</dimen>
++    <dimen name="car_body5_size">12sp</dimen>
++    <dimen name="car_label1_size">14sp</dimen>
++    <dimen name="car_label2_size">32sp</dimen>
++    <dimen name="car_action1_size">14sp</dimen>
++    <dimen name="car_action2_size">14sp</dimen>
++
++    <!-- Common icon size for car app - reduced for 800x480 -->
++    <dimen name="car_icon_size">36dp</dimen>
++    <dimen name="car_primary_icon_size">32dp</dimen>
++    <dimen name="car_secondary_icon_size">24dp</dimen>
++
++    <dimen name="car_card_header_height">48dp</dimen>
++    <dimen name="car_card_action_bar_height">48dp</dimen>
++
++    <!-- Paddings - reduced for 800x480 -->
++    <dimen name="car_padding_0">2dp</dimen>
++    <dimen name="car_padding_1">4dp</dimen>
++    <dimen name="car_padding_2">8dp</dimen>
++    <dimen name="car_padding_3">12dp</dimen>
++    <dimen name="car_padding_4">16dp</dimen>
++    <dimen name="car_padding_5">24dp</dimen>
++    <dimen name="car_padding_6">32dp</dimen>
+ 
+     <!-- Radius -->
+     <dimen name="car_radius_1">4dp</dimen>
+@@ -71,28 +72,28 @@
+     <dimen name="car_radius_3">16dp</dimen>
+     <dimen name="car_radius_5">100dp</dimen>
+ 
+-    <!-- Keylines for content. -->
+-    <dimen name="car_keyline_1">48dp</dimen>
+-    <dimen name="car_keyline_2">108dp</dimen>
+-    <dimen name="car_keyline_3">152dp</dimen>
+-    <dimen name="car_keyline_4">182dp</dimen>
++    <!-- Keylines for content - reduced for 800x480 -->
++    <dimen name="car_keyline_1">16dp</dimen>
++    <dimen name="car_keyline_2">48dp</dimen>
++    <dimen name="car_keyline_3">72dp</dimen>
++    <dimen name="car_keyline_4">96dp</dimen>
+ 
+-    <!-- Buttons -->
+-    <dimen name="car_button_height">56dp</dimen>
+-    <dimen name="car_button_min_width">158dp</dimen>
+-    <dimen name="car_button_horizontal_padding">@dimen/car_padding_4</dimen>
++    <!-- Buttons - reduced for 800x480 -->
++    <dimen name="car_button_height">40dp</dimen>
++    <dimen name="car_button_min_width">80dp</dimen>
++    <dimen name="car_button_horizontal_padding">@dimen/car_padding_3</dimen>
+     <dimen name="car_borderless_button_horizontal_padding">0dp</dimen>
+     <dimen name="car_button_radius">@dimen/car_radius_1</dimen>
+-    <dimen name="car_pill_button_size">56dp</dimen>
+-    <dimen name="car_touch_target_size">76dp</dimen>
+-    <dimen name="car_touch_target_size_minus_one">75dp</dimen>
++    <dimen name="car_pill_button_size">40dp</dimen>
++    <dimen name="car_touch_target_size">48dp</dimen>
++    <dimen name="car_touch_target_size_minus_one">47dp</dimen>
+ 
+-    <!-- Switch. -->
++    <!-- Switch - adjusted for 48dp touch target -->
+     <!-- Thumb size + 2*thumb margin size must equal car_touch_target_size -->
+     <!-- 2 * Thumb size + 2*track margin size must equal car_touch_target_size -->
+-    <dimen name="car_switch_thumb_size">24dp</dimen>
+-    <dimen name="car_switch_thumb_margin_size">26dp</dimen>
+-    <dimen name="car_switch_track_margin_size">14dp</dimen>
++    <dimen name="car_switch_thumb_size">20dp</dimen>
++    <dimen name="car_switch_thumb_margin_size">14dp</dimen>
++    <dimen name="car_switch_track_margin_size">4dp</dimen>
+ 
+     <!-- Seekbar -->
+     <dimen name="car_seekbar_height">6dp</dimen>
+@@ -152,9 +153,9 @@
+     <dimen name="action_bar_button_max_width">268dp</dimen>
+     <dimen name="action_bar_toggle_internal_padding">@*android:dimen/car_padding_3</dimen>
+ 
+-    <!-- Intent Resolver -->
+-    <dimen name="car_activity_resolver_width">706dp</dimen>
+-    <dimen name="car_activity_resolver_list_item_height">96dp</dimen>
+-    <dimen name="car_activity_resolver_list_max_height">256dp</dimen>
+-    <dimen name="car_activity_resolver_corner_radius">24dp</dimen>
++    <!-- Intent Resolver - reduced for 800x480 (592px usable width) -->
++    <dimen name="car_activity_resolver_width">280dp</dimen>
++    <dimen name="car_activity_resolver_list_item_height">44dp</dimen>
++    <dimen name="car_activity_resolver_list_max_height">160dp</dimen>
++    <dimen name="car_activity_resolver_corner_radius">16dp</dimen>
+ </resources>

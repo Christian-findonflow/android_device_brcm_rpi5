@@ -1001,6 +1001,29 @@ Open after Phase 2 (in rough priority):
 - Nav prompts during a call go nowhere (A2DP suspended by the SCO links);
   accepted for now.
 
+## Settings back arrow clipped, and uncaptured local edits (2026-09-06 12:35)
+
+Christian: the back arrow on every Settings page overflowed the panel's left
+edge and was hard to press. Cause: our own local edit of
+packages/apps/Car/Settings dimens set car_ui_toolbar_margin=8dp, and
+car-ui-lib uses that margin as the width of the back-arrow container, so a
+32 dp arrow sat in a 6 px box. Now 44 dp (4 dp start inset); verified.
+
+That edit was never captured: `repo status` found uncommitted small-screen
+work from 2026-08-30 in two non-fork projects. Both are now local branches
+`neo-motorcycle` with one commit each, exported as patches and applied by
+patches/apply.sh like the Bluetooth series:
+- packages/apps/Car/Settings -> patches/packages_apps_Car_Settings/0001
+  (car-ui sizes, dialog margins, compact Wi-Fi password dialog).
+- frameworks/base -> patches/frameworks_base/0001 (dimens_car.xml, car
+  alert-dialog button bar).
+Also found: build/release/aconfig/ap4a/android.car.feature/
+task_view_task_reordering_flag_values.textproto is an EMPTY untracked file
+dated 2025-12-26 (from the original checkout, not ours) - harmless, left.
+Everything else is either a fork (Launcher, SystemUI, Car services,
+LatinIME, rpi5 device tree) or clean. Rule going forward: run `repo status`
+before cutting an image; anything modified outside a fork must be a patch.
+
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
 `UsbService.onSwitchUser` NPE on the android.fg thread at the user-10
