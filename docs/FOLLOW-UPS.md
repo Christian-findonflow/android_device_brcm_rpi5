@@ -719,7 +719,10 @@ channel ~5 s after opening it. Whether a boot works depends on how fast the
 download happens to run. Fix: patch 0007 - PbapClientService.connect() posts
 the real connect 15 s later (token = device, cancelled on ACL drop /
 disconnect), PROPERTY_PHOTO removed from the vCard filter, HF client
-CONNECTING_TIMEOUT_MS 20 s. Verification pending on the next reboot.
+CONNECTING_TIMEOUT_MS 20 s. Verified 09:48: HF client, A2DP sink and AVRCP
+controller all Connected within seconds of the ACL, PBAP deferred 15 s and
+done 9 s later (no photos), zero crashes on that boot (even the usual SystemUI
+DeadSystemException did not occur).
 
 ## Phase 2 scoping: call audio through the dash (written 2026-09-06 00:15)
 
