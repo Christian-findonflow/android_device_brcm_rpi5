@@ -975,8 +975,31 @@ com.android.car.dialer, Telecom system dialer = the car Dialer's
 InCallServiceImpl, SystemUI clean, props persisted; AirPods back on A2DP AND
 HFP (AG active device), phone on HF client + A2DP sink. Image v18
 (~/images/...-v18.img.gz, sha 4f366e7c) has everything: call bridge, Dialer
-overlays, chip v2, AndroidCarRpiOverlay. Awaiting Christian's call test of
-the in-call screen and the chip.
+overlays, chip v2, AndroidCarRpiOverlay.
+
+VERIFIED 2026-09-06 12:00 by Christian: "all working exactly as expected" -
+call audio both ways through the dash, in-call screen opens on its own,
+chip with name and duration when the map is in front, phone button and chip
+return to the call, red button ends it. Phase 2 step 1 complete.
+
+Open after Phase 2 (in rough priority):
+- Incoming-call path untested: AirPods ring with their own tone (in-band
+  off), answer from the stem or the dash heads-up; check music resumes
+  after the call on both legs.
+- Siri through the earbuds: a phone-initiated SCO with no call (Siri) has
+  no earbud link, the bridge drops it. Native lever: on HF-client audio-up
+  without a call, start an AG virtual voice call so the earbud link opens.
+  And the reverse: AirPods stem press -> AT+BVRA to our AG -> forward as HF
+  client startVoiceRecognition to the phone (see the parked voice-assistant
+  section).
+- Codec mismatch between the two SCO links is logged once and dropped
+  (mSBC on both today); add transcoding only if it ever shows up.
+- Apple auto-switch: recommend "Connect to This iPhone: When Last Connected"
+  for the AirPods; otherwise the iPhone can hold the hands-free channel and
+  the AirPods refuse the dash's connection (DM on the RFCOMM SABM, seen 11:41).
+- Fresh flash of v18 needs the AirPods re-paired (sets the gateway policy).
+- Nav prompts during a call go nowhere (A2DP suspended by the SCO links);
+  accepted for now.
 
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
