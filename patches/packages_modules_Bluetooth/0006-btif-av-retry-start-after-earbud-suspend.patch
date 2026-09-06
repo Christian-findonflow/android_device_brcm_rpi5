@@ -1,3 +1,23 @@
+From df8b30aa0ca334ad661cd4f51fc60c29e2724539 Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sat, 5 Sep 2026 23:54:09 +0000
+Subject: [PATCH] btif_av: retry START after the earbuds suspend while the
+ phone still streams into us
+
+A remote suspend of our sink peer is sticky in AOSP until the remote's
+AVRCP PLAY clears kFlagRemoteSuspend. On the dash that pass-through is
+handled by the new AVRCP target profile and never reaches btif_av, and
+the audio HAL port stays STARTED so nothing re-issues START: the earbuds
+would stay silent until the phone itself paused. In coexist mode, when
+our sink is streaming, do not set the flag and retry START at 2, 5 and
+10 s.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: I1078ae2c606c4a824f87210f9ae6d8a7e095e411
+---
+ system/btif/src/btif_av.cc | 48 +++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 47 insertions(+), 1 deletion(-)
+
 diff --git a/system/btif/src/btif_av.cc b/system/btif/src/btif_av.cc
 index 1c1ad7f..765e8d1 100644
 --- a/system/btif/src/btif_av.cc
@@ -64,3 +84,6 @@ index 1c1ad7f..765e8d1 100644
          }
        } else {
          state = BTAV_AUDIO_STATE_STOPPED;
+-- 
+2.34.1
+

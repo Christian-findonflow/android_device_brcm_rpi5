@@ -1,3 +1,25 @@
+From 5b74ea304a691eecdab3961d8f68bdd38ae27057 Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sat, 5 Sep 2026 23:18:33 +0000
+Subject: [PATCH] avrcp: scope the src/sink role-switch close to the peer whose
+ role changed
+
+AVRC_UpdateCcb() fired a synthetic AVRC_CLOSE_IND_EVT at every connection
+registered under the other role's company id, carrying the new peer's
+address. With a phone streaming to the sink and earbuds connecting as
+our sink, the earbuds' SNK role closed the phone's controller channel;
+the controller service then cleared the A2DP sink active device and the
+phone's audio stopped ('Bluetooth audio disconnected'). Add
+AVCT_GetPeerAddr() and skip connections that belong to another peer.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: I5f3399063858389e7d44197deedef44011f70562
+---
+ system/stack/avct/avct_api.cc   | 18 ++++++++++++++++++
+ system/stack/avrc/avrc_api.cc   | 11 +++++++++++
+ system/stack/include/avct_api.h | 13 +++++++++++++
+ 3 files changed, 42 insertions(+)
+
 diff --git a/system/stack/avct/avct_api.cc b/system/stack/avct/avct_api.cc
 index c23f89d..5421844 100644
 --- a/system/stack/avct/avct_api.cc
@@ -73,3 +95,6 @@ index bcc40ee..ab1c5cc 100644
  /*******************************************************************************
   *
   * Function         AVCT_MsgReq
+-- 
+2.34.1
+

@@ -1,3 +1,27 @@
+From 41cec87338c9f423d1545b0cf54b3194ccb9cd60 Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sun, 6 Sep 2026 13:00:12 +0000
+Subject: [PATCH] hfp: keep in-band ringing on while a hands-free client is
+ connected
+
+AOSP turns the AG's in-band ringing off whenever a hands-free client is
+connected, because a car kit cannot source the ring tone itself. The NEO
+dash bridges the phone's SCO link to the earbuds' SCO link, so the phone's
+own in-band ring tone (iPhones always ring in-band) reaches the earbuds as
+long as the earbud link is open while ringing, which is exactly what
+in-band ringing makes Telecom do (BluetoothDeviceManager connects audio
+during ringing when the headset reports in-band ringing). AirPods have no
+local ring tone, so without this they stayed silent on incoming calls.
+
+Both places are changed: isInbandRingingEnabled() and the runtime disable
+in updateInbandRinging().
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: I0e04d53e38e0b7fc19b43d7ab08c6c31e9993a83
+---
+ .../com/android/bluetooth/hfp/HeadsetService.java | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
 diff --git a/android/app/src/com/android/bluetooth/hfp/HeadsetService.java b/android/app/src/com/android/bluetooth/hfp/HeadsetService.java
 index a33d313..c1a7d7c 100644
 --- a/android/app/src/com/android/bluetooth/hfp/HeadsetService.java
@@ -34,3 +58,6 @@ index a33d313..c1a7d7c 100644
                  mInbandRingingRuntimeDisable = true;
              } else {
                  mInbandRingingRuntimeDisable = false;
+-- 
+2.34.1
+

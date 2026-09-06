@@ -1,5 +1,28 @@
+From 5db02973840d38617a6d606a2fd0c0cf3708d352 Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sat, 5 Sep 2026 23:07:47 +0000
+Subject: [PATCH] a2dp sink: never block the sink worker on the AudioTrack
+ write
+
+The legacy AAudio path ignores the write timeout and blocks until every
+frame fits in the track buffer. On the NEO dash the track's output is a
+second Bluetooth link (earbuds) whose stream start needs the stack's
+main thread, which is parked on g_mutex in btif_a2dp_sink_enqueue_buf
+waiting for this worker: the stack froze for minutes on 2026-09-05
+(START response, ACL disconnects, AVRCP commands and the HFP dial all
+stuck). Write non-blocking with a 20 ms grace period and drop the rest.
+
+Local patch only - this project is not one of our forks; the diff lives
+in device/brcm/rpi5/patches/.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: I6b989f07c37b68702ca75dfc4f064cc75c70cc2b
+---
+ system/btif/src/btif_avrcp_audio_track.cc | 78 ++++++++++++++++++++---
+ 1 file changed, 69 insertions(+), 9 deletions(-)
+
 diff --git a/system/btif/src/btif_avrcp_audio_track.cc b/system/btif/src/btif_avrcp_audio_track.cc
-index 066d5ba..6a81a6b 100644
+index 066d5ba..d15c855 100644
 --- a/system/btif/src/btif_avrcp_audio_track.cc
 +++ b/system/btif/src/btif_avrcp_audio_track.cc
 @@ -29,6 +29,8 @@
@@ -11,72 +34,7 @@ index 066d5ba..6a81a6b 100644
  #include <thread>
  
  using namespace bluetooth;
-@@ -56,20 +58,38 @@ static struct AudioEngine {
- 
- static void ErrorCallback(AAudioStream* stream, void* userdata, aaudio_result_t error);
- 
--static void BtifAvrcpAudioErrorHandle() {
--  AAudioStreamBuilder* builder;
--  AAudioStream* stream;
-+// NEO dash: the phone delivers A2DP packets in bursts of two or three (23 ms
-+// of audio each) and the output is a second Bluetooth link. With the stock
-+// LOW_LATENCY request the AudioTrack behind this stream held 2052 frames
-+// (46 ms), so a three-packet burst never fit and one packet was dropped
-+// every few seconds - audible as a tick in the earbuds (2026-09-05). Ask
-+// for a buffer that swallows any burst; music does not care about 190 ms.
-+constexpr int32_t kTrackBufferCapacityFrames = 8192;
- 
-+static AAudioStream* openSinkStream(int trackFreq, int channelCount) {
-+  AAudioStreamBuilder* builder;
-+  AAudioStream* stream = nullptr;
-   aaudio_result_t result = AAudio_createStreamBuilder(&builder);
--  AAudioStreamBuilder_setSampleRate(builder, s_AudioEngine.trackFreq);
-+  log::assert_that(result == AAUDIO_OK, "assert failed: createStreamBuilder");
-+  AAudioStreamBuilder_setSampleRate(builder, trackFreq);
-   AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
--  AAudioStreamBuilder_setChannelCount(builder, s_AudioEngine.channelCount);
-+  AAudioStreamBuilder_setChannelCount(builder, channelCount);
-   AAudioStreamBuilder_setSessionId(builder, AAUDIO_SESSION_ID_ALLOCATE);
--  AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-+  AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
-+  AAudioStreamBuilder_setBufferCapacityInFrames(builder, kTrackBufferCapacityFrames);
-   AAudioStreamBuilder_setErrorCallback(builder, ErrorCallback, nullptr);
-   result = AAudioStreamBuilder_openStream(builder, &stream);
-   log::assert_that(result == AAUDIO_OK, "assert failed: result == AAUDIO_OK");
-   AAudioStreamBuilder_delete(builder);
-+  const int32_t capacity = AAudioStream_getBufferCapacityInFrames(stream);
-+  AAudioStream_setBufferSizeInFrames(stream, capacity);
-+  log::info("sink track: {} Hz, {} ch, buffer capacity {} frames, size {} frames", trackFreq,
-+            channelCount, capacity, AAudioStream_getBufferSizeInFrames(stream));
-+  return stream;
-+}
-+
-+static void BtifAvrcpAudioErrorHandle() {
-+  AAudioStream* stream = openSinkStream(s_AudioEngine.trackFreq, s_AudioEngine.channelCount);
- 
-   BtifAvrcpAudioTrack* trackHolder = static_cast<BtifAvrcpAudioTrack*>(s_AudioEngine.trackHandle);
- 
-@@ -94,18 +114,7 @@ void* BtifAvrcpAudioTrackCreate(int trackFreq, int bitsPerSample, int channelCou
-   log::info("Track.cpp: btCreateTrack freq {} bps {} channel {}", trackFreq, bitsPerSample,
-             channelCount);
- 
--  AAudioStreamBuilder* builder;
--  AAudioStream* stream;
--  aaudio_result_t result = AAudio_createStreamBuilder(&builder);
--  AAudioStreamBuilder_setSampleRate(builder, trackFreq);
--  AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
--  AAudioStreamBuilder_setChannelCount(builder, channelCount);
--  AAudioStreamBuilder_setSessionId(builder, AAUDIO_SESSION_ID_ALLOCATE);
--  AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
--  AAudioStreamBuilder_setErrorCallback(builder, ErrorCallback, nullptr);
--  result = AAudioStreamBuilder_openStream(builder, &stream);
--  log::assert_that(result == AAUDIO_OK, "assert failed: result == AAUDIO_OK");
--  AAudioStreamBuilder_delete(builder);
-+  AAudioStream* stream = openSinkStream(trackFreq, channelCount);
- 
-   BtifAvrcpAudioTrack* trackHolder = new BtifAvrcpAudioTrack;
-   log::assert_that(trackHolder != NULL, "assert failed: trackHolder != NULL");
-@@ -247,24 +256,82 @@ static size_t transcodeToPcmFloat(uint8_t* buffer, size_t length,
+@@ -247,24 +249,82 @@ static size_t transcodeToPcmFloat(uint8_t* buffer, size_t length,
    return -1;
  }
  
@@ -168,3 +126,6 @@ index 066d5ba..6a81a6b 100644
    } while (transcodedCount < bufferLength);
  
    return transcodedCount;
+-- 
+2.34.1
+

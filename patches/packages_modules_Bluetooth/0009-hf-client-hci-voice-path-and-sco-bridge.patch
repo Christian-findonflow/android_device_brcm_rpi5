@@ -1,3 +1,41 @@
+From 234b025fbe7f1c40fe6c76d1c316c5c66c40898f Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sun, 6 Sep 2026 10:44:09 +0000
+Subject: [PATCH] hf client: route SCO over HCI; btm: bridge voice between two
+ SCO links
+
+The hands-free client hardcoded offload=true in all seven
+esco_parameters_for_codec() calls, so the phone's voice link was set up
+with data path = PCM and the audio went to the controller's unwired PCM
+pins. Follow hfp_hal_interface::get_offload_enabled() like the AG does
+(data path = HCI when bluetooth.hfp.software_datapath.enabled is set).
+
+New stack/btm/btm_sco_bridge.{h,cc}: when bluetooth.neo.sco_bridge.enabled
+is set (sampled at each SCO connect), every in-band SCO packet is forwarded
+verbatim to the other connected in-band SCO link through a byte ring per
+link, re-packetised to the destination's packet length. Same codec required
+on both links; a mismatch is logged once and dropped. Hooked into
+btm_route_sco_data() before the single-active-SCO check (which would have
+dropped the second link's packets), btm_sco_connected() and the disconnect
+handler. Adds btm_send_sco_packet_to(handle, data).
+
+This is what lets a phone call reach the earbuds through the dash: the
+dash is HFP client to the phone and HFP AG to the earbuds, and the Android
+audio framework cannot represent two SCO links.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: Ieb7e341d1b22004d0bbbfdf2c511523aa94ee9fd
+---
+ system/bta/hf_client/bta_hf_client_sco.cc |  15 +-
+ system/stack/Android.bp                   |   2 +
+ system/stack/btm/btm_sco.cc               |  16 +-
+ system/stack/btm/btm_sco.h                |   2 +
+ system/stack/btm/btm_sco_bridge.cc        | 202 ++++++++++++++++++++++
+ system/stack/btm/btm_sco_bridge.h         |  41 +++++
+ 6 files changed, 270 insertions(+), 8 deletions(-)
+ create mode 100644 system/stack/btm/btm_sco_bridge.cc
+ create mode 100644 system/stack/btm/btm_sco_bridge.h
+
 diff --git a/system/bta/hf_client/bta_hf_client_sco.cc b/system/bta/hf_client/bta_hf_client_sco.cc
 index 970d88f..0fd80b6 100644
 --- a/system/bta/hf_client/bta_hf_client_sco.cc
@@ -393,3 +431,6 @@ index 0000000..d5e0217
 +bool route(const bluetooth::hci::ScoView& packet);
 +
 +}  // namespace neo::sco_bridge
+-- 
+2.34.1
+

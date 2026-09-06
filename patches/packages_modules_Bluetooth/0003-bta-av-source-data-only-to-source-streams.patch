@@ -1,3 +1,23 @@
+From d30a1b039ae537ba90d5c897368ef1b7995585d8 Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sat, 5 Sep 2026 23:27:24 +0000
+Subject: [PATCH] bta_av: never feed source data into a stream where we are the
+ sink
+
+With source and sink profiles both enabled, the sink stream from the
+phone is 'started' too and bta_av_ci_data() hands it the source
+data-ready event: it pulled encoded frames from our encoder and pushed
+them to the phone at full rate while the earbuds starved and dropped
+their link. Guard bta_av_data_path() and bta_av_dup_audio_buf() on the
+local SEP direction.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: I59976da832c2160be999c99acfe8a64200c5450a
+---
+ system/bta/av/bta_av_aact.cc | 10 ++++++++++
+ system/bta/av/bta_av_main.cc |  3 +++
+ 2 files changed, 13 insertions(+)
+
 diff --git a/system/bta/av/bta_av_aact.cc b/system/bta/av/bta_av_aact.cc
 index 7cf03c3..adbd5d1 100644
 --- a/system/bta/av/bta_av_aact.cc
@@ -33,3 +53,6 @@ index 54678f0..655713e 100644
      if (!(bta_av_cb.conn_audio & BTA_AV_HNDL_TO_MSK(i))) {
        continue; /* Audio is not connected */
      }
+-- 
+2.34.1
+

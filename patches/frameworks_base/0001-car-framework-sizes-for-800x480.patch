@@ -1,3 +1,21 @@
+From b154023b15d8ae6fbdfeab6e9e37e3ae11bc167a Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sun, 6 Sep 2026 12:36:25 +0000
+Subject: [PATCH] Car framework sizes for the 800x480 dash
+
+Local, uncommitted edits from the 2026-08-30 settings work, captured now
+as device/brcm/rpi5/patches/frameworks_base/0001: dimens_car.xml (car text
+sizes, list row heights, margins, avatar sizes reduced for the 592x352 px
+panel at 120 dpi) and the car alert-dialog button bar (80 dp min width,
+40 dp height).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: Icf03c64d5a06684057787559045681557336b995
+---
+ .../car_alert_dialog_button_bar.xml           |  12 +-
+ core/res/res/values/dimens_car.xml            | 119 +++++++++---------
+ 2 files changed, 66 insertions(+), 65 deletions(-)
+
 diff --git a/core/res/res/layout-car/car_alert_dialog_button_bar.xml b/core/res/res/layout-car/car_alert_dialog_button_bar.xml
 index 43fd1eb4c..da76194b7 100644
 --- a/core/res/res/layout-car/car_alert_dialog_button_bar.xml
@@ -201,3 +219,6 @@ index 99377ffd5..fa7e18ffe 100644
 +    <dimen name="car_activity_resolver_list_max_height">160dp</dimen>
 +    <dimen name="car_activity_resolver_corner_radius">16dp</dimen>
  </resources>
+-- 
+2.34.1
+

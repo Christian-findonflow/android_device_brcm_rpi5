@@ -1,3 +1,21 @@
+From ab129d0889f2d63901b609a0e1e55c3d61a5acc3 Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sat, 5 Sep 2026 23:38:05 +0000
+Subject: [PATCH] avdtp: only transmit streams compete for the current-stream
+ slot
+
+avdt_scb_event() lets a single 'current' stream send when more than one
+stream is in the streaming state. It counted the stream on which our
+local SEP is a sink (the phone playing into us), so the earbud stream
+never got the slot and every media packet was freed ('ignore
+AVDT_SCB_API_WRITE_REQ_EVT' at 43/s). Count only SRC-side streams.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: Iab2d93da6e68dfa49430f276b269a1a4f37f081b
+---
+ system/stack/avdt/avdt_scb.cc | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
 diff --git a/system/stack/avdt/avdt_scb.cc b/system/stack/avdt/avdt_scb.cc
 index 1e1d7ae..ae1cd09 100644
 --- a/system/stack/avdt/avdt_scb.cc
@@ -17,3 +35,6 @@ index 1e1d7ae..ae1cd09 100644
          num_st_streams++;
          ccb_index = i;
          scb_index = j;
+-- 
+2.34.1
+

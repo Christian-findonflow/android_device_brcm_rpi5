@@ -1,3 +1,22 @@
+From 73623d64c784d0af28f9f021cbaaa88d9d258cfc Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sun, 6 Sep 2026 13:17:26 +0000
+Subject: [PATCH] btm: sco bridge drops packets the controller flags as corrupt
+
+The bridge forwarded every received SCO packet verbatim. An mSBC frame's
+CRC only covers its header, so a packet the controller flagged as possibly
+invalid or missing was decoded as noise by the far end. On a 13-second call
+4.3% of the phone's packets were flagged and the received voice sounded
+"like a low bitrate". Drop such packets instead: the far end sees an H2
+sequence gap and runs its packet-loss concealment, which is what Android's
+own SCO receive path does with them.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: Id129a353dd44048e884d8db71b99e5bdee9bce1b
+---
+ system/stack/btm/btm_sco_bridge.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
 diff --git a/system/stack/btm/btm_sco_bridge.cc b/system/stack/btm/btm_sco_bridge.cc
 index 4f27144..cf6e302 100644
 --- a/system/stack/btm/btm_sco_bridge.cc
@@ -19,3 +38,6 @@ index 4f27144..cf6e302 100644
    }
  
    tSCO_CONN* src_conn = btm_cb.sco_cb.get_sco_connection_from_handle(handle);
+-- 
+2.34.1
+

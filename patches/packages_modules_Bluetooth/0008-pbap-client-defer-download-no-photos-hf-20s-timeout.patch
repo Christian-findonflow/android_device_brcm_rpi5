@@ -1,3 +1,23 @@
+From 0a6616e6ef9a3c4dbc5f62517f764f2fad319535 Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sun, 6 Sep 2026 09:50:43 +0000
+Subject: [PATCH] pbap client: defer the phonebook download 15 s and drop
+ contact photos; hf client: 20 s connect timeout
+
+Started with the other profiles, the phonebook download (vCards with
+photos, 60 kB/s for 30 s) starved the hands-free SLC and the A2DP setup
+on the same link: our 10 s SLC timer fired three times and the phone
+dropped the AVDTP channel after its own 5 s, leaving the dash with
+neither audio nor calls until the next reconnect.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: Id4df951c2e2e0ee3a0e7916399d74beff68f8299
+---
+ .../hfpclient/HeadsetClientStateMachine.java  |  4 +-
+ .../pbapclient/PbapClientService.java         | 43 ++++++++++++++++++-
+ .../pbapclient/PbapClientStateMachine.java    |  5 ++-
+ 3 files changed, 49 insertions(+), 3 deletions(-)
+
 diff --git a/android/app/src/com/android/bluetooth/hfpclient/HeadsetClientStateMachine.java b/android/app/src/com/android/bluetooth/hfpclient/HeadsetClientStateMachine.java
 index 8c6b0e4..bc938ba 100644
 --- a/android/app/src/com/android/bluetooth/hfpclient/HeadsetClientStateMachine.java
@@ -104,3 +124,6 @@ index 3c37cda..f08ecb9 100644
                      | PbapApplicationParameters.PROPERTY_ADR
                      | PbapApplicationParameters.PROPERTY_TEL
                      | PbapApplicationParameters.PROPERTY_EMAIL
+-- 
+2.34.1
+

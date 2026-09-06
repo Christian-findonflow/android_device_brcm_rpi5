@@ -1,3 +1,21 @@
+From 965f772fdc7f6e3efa783ce0647ed969e1719e81 Mon Sep 17 00:00:00 2001
+From: Christian <christian@find.xyz>
+Date: Sun, 6 Sep 2026 00:03:20 +0000
+Subject: [PATCH] avrcp target: ignore the earbuds' hand-back PAUSE
+
+Earbuds that also belong to the phone (AirPods after a Siri prompt or a
+call) send PAUSE to us as the phone hands them back, whether or not we
+were playing into them. On the dash that PAUSE is forwarded to the
+phone and stops the music the rider just got back. Ignore a PAUSE for a
+stream that is not playing or started less than 1.5 s ago.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Change-Id: Ie18fd7ae1727fe3fd11dfe6af2b4ce62504d5e2f
+---
+ .../android/bluetooth/a2dp/A2dpService.java   |  2 +-
+ .../bluetooth/avrcp/AvrcpTargetService.java   | 40 +++++++++++++++++++
+ 2 files changed, 41 insertions(+), 1 deletion(-)
+
 diff --git a/android/app/src/com/android/bluetooth/a2dp/A2dpService.java b/android/app/src/com/android/bluetooth/a2dp/A2dpService.java
 index 08cd9d9..52c1bdf 100644
 --- a/android/app/src/com/android/bluetooth/a2dp/A2dpService.java
@@ -97,3 +115,6 @@ index b3ccdbf..f0f418f 100644
          // A/V controls should be sent to the addressed player.
          // We don't have a way to set a media player as the active session so we
          // keep the active device playing until we receive a PLAY event for the
+-- 
+2.34.1
+
