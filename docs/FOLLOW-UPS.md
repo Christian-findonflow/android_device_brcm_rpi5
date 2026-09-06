@@ -668,6 +668,40 @@ follow-up: a sane default for the voice-call index on Bluetooth A2DP (it
 matters again for Phase 2). Map stutter during prompts = Pi CPU: ogg decode +
 AAC decode + AAC encode + map render; watch it once the GPS is in.
 
+## Volume panel (shipped 2026-09-06 09:30)
+
+Christian asked for an easy way to set volumes. Facts found: CarAudioService
+runs in LEGACY mode here (no dynamic routing), where it exposes exactly three
+volume groups = STREAM_MUSIC / STREAM_ALARM / STREAM_RING
+(`CarAudioDynamicRouting.STREAM_TYPES`). The stock top-bar sound icon opens
+SystemUI's `qc_volume_panel` whose sliders are Car Settings quick controls
+keyed by usage; call and navigation usages map to no group in legacy mode, so
+only the media slider and the "Sound settings" footer ever showed - and the
+voice-call stream (3/15, dragging the earbuds' absolute volume down during
+prompts) was not adjustable anywhere.
+
+Shipped: the launcher's `audio/VolumeQCProvider` (content://com.android.car.
+carlauncher.qc/volume, allowlisted to SystemUI) serves three sliders bound
+straight to streams - Music (STREAM_MUSIC; also the earbuds' AVRCP absolute
+volume; subtitle = earbud name), Prompts (STREAM_NOTIFICATION; OsmAnd must be
+set to "Notification" output for this to be its knob), Calls
+(STREAM_VOICE_CALL; enabled only while a phone is connected over HFP). The
+SystemUI fork's `qc_volume_panel.xml` points at it. Two permissions were
+needed: BLUETOOTH_CONNECT (runtime; pre-granted via
+default-permissions-carlauncher.xml on a fresh flash, `pm grant` on the
+bench) and MODIFY_AUDIO_SETTINGS_PRIVILEGED (automotive audio hardening:
+`AS.HardeningEnforcer: Preventing volume method` silently drops
+setStreamVolume from app uids without it; allowlisted in the Car fork's
+com.android.car.carlauncher.xml). Verified by Christian.
+
+Boot race found on the same morning: CarService's early-startup entry for
+`HomeCockpitLauncherService` used `bind=start`; startService() at unlock
+throws BackgroundServiceStartNotAllowedException when the launcher uid is
+momentarily background, and CarService restarted 3x. Now `bind=bind` and the
+service launches the cockpit from onCreate(). Also seen at every boot: one
+SystemUI `DeadSystemException` on wmshell.main (SystemUI restarts once during
+boot) - not investigated, cosmetic so far.
+
 ## Phase 2 scoping: call audio through the dash (written 2026-09-06 00:15)
 
 What exists today, from the code (packages/modules/Bluetooth, device audio HAL):
