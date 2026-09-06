@@ -704,6 +704,25 @@ unlock and launches the singleTask cockpit twice; harmless). Also seen at every 
 SystemUI `DeadSystemException` on wmshell.main (SystemUI restarts once during
 boot) - not investigated, cosmetic so far.
 
+## Now Playing screen (shipped 2026-09-06 10:16)
+
+Christian: "can we improve our music app". The stock car Media app on the
+592x352 panel showed a big empty browse area with one "Music" tile, a
+truncated title and a thin control strip. Shipped
+`launcher/audio/NowPlayingActivity` (MediaBrowser -> BluetoothMediaBrowserService
+-> MediaController; art from the AvrcpCoverArtProvider content URI; progress
+from PlaybackState position/speed): cover art 210dp, title/artist/album,
+seek bar with times, prev / play-pause / next at 72dp height, library button
+that opens the old browser (MEDIA_TEMPLATE intent). Bottom-bar music button
+now targets it. Gotcha: launcher-package activities can inherit the LEFT
+(cluster) task display area when CarLauncher's task was just recreated -
+MotoSplitDisplayAreaController now pins NowPlayingActivity to the default
+container, same as HomeCockpitActivity. Bench trap: `pm uninstall --user 10`
+on the system launcher hides it for the user (FallbackHome appears);
+`pm install-existing --user 10 com.android.car.carlauncher` restores it.
+Ideas not done: queue/up-next list from the AVRCP browse tree, favourite
+button, volume shortcut in the screen.
+
 ## Phone reconnect race: phonebook download starves audio and calls (2026-09-06 09:40)
 
 Christian: "sometimes connecting the earbuds doesn't enable the bluetooth
