@@ -652,6 +652,22 @@ standardise on recorded voices. The sink handler's focus behaviour is AOSP
 car standard: MAY_DUCK prompts duck the phone's music via the track gain,
 TRANSIENT focus (assistant/phone) pauses the phone over AVRCP.
 
+Bench 2026-09-06 (recorded en-gb voice + simulated position): prompts DO play
+(JsMediaCommandPlayer around_1_mile.ogg / left.ogg) and the sink ducks the
+music to 25 % and restores it - the focus path is right. But OsmAnd plays them
+on the VOICE-CALL stream (USAGE_VOICE_COMMUNICATION), whose index on the A2DP
+device was 3/15, and while a call-stream sound is active AudioService lets
+that stream drive the earbuds' AVRCP absolute volume ("absolute volume driving
+streams 0"): the prompt was inaudible under the music and the earbuds' volume
+was yanked to ~20 % for the duration, occasionally not restored ("music comes
+back very low sometimes"). Interim: `media volume --stream 0 --set 12` on the
+bike (persisted per device by AudioService). Proper fix: OsmAnd -> Navigation
+settings -> Voice prompts -> audio output = Media/music, so prompts share the
+music stream and volume (ducking still works, it is focus-based). Image-side
+follow-up: a sane default for the voice-call index on Bluetooth A2DP (it
+matters again for Phase 2). Map stutter during prompts = Pi CPU: ogg decode +
+AAC decode + AAC encode + map render; watch it once the GPS is in.
+
 ## Phase 2 scoping: call audio through the dash (written 2026-09-06 00:15)
 
 What exists today, from the code (packages/modules/Bluetooth, device audio HAL):
