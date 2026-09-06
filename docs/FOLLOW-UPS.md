@@ -1062,6 +1062,19 @@ Fixes (built 12:55, bench check pending):
   AudioFlinger past its watchdog.
 - Not fixed: the SystemUI AutoTaskRepository NPE (source is not in the
   tree, prebuilt WM Shell automotive lib); moot once CarService stops dying.
+Image v20 (~/images/...-v20.img.gz, sha 83741f00, 13:03) carries all three.
+Note the car service code is CarServiceUpdatableNonModule.apk
+(/system/priv-app/CarServiceUpdatableNonModule/), not the 271 KB
+CarService.apk stub - push the right one when hot-swapping.
+
+Generic-device review (Christian asked 13:05, "is this AirPods specific?"):
+the bridge, roles and UI are generic; two gaps: (1) codec mismatch - the
+bridge needs the same codec on both links; CVSD-only earbuds get no audio
+(transcode mSBC<->CVSD in the bridge, or force the phone link to CVSD when
+the earbuds lack mSBC); (2) in-band ringing is now unconditional on the AG;
+it should mirror the phone (HeadsetClientStateMachine.getInBandRing()) so
+a phone that does not ring in-band lets the earbuds use their own tone.
+Both offered, not started.
 
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
