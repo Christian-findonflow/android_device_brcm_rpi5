@@ -636,6 +636,57 @@ scratchpad `snoop.py`/`snoop3.py`):
   remote-SUSPEND restart path, OsmAnd prompt ducking check, v9 image =
   ~/images/RaspberryVanillaAOSP16-20260905-rpi5_motorcycle-v9.img.gz.
 
+## Phase 2 scoping: call audio through the dash (written 2026-09-06 00:15)
+
+What exists today, from the code (packages/modules/Bluetooth, device audio HAL):
+
+- HF-client role (dash <- phone): `bta/hf_client/bta_hf_client_sco.cc` (663
+  lines) opens/closes SCO with BTM_CreateSco and assumes a hardware PCM
+  path. It has NO software datapath: no `HfpClientInterface`, no
+  Encode/Decode/Offload objects, no `hfp_software_datapath_enabled`.
+- AG role (dash -> earbuds): `bta/ag/bta_ag_sco.cc` has the full software
+  path (Android 15 `bluetooth.hfp.software_datapath.enabled`): Encode/Decode
+  interfaces, ConfirmStreamingRequest/CancelStreamingRequest, Write of RX
+  SCO into the decoder, Read of TX PCM from the encoder. This is the template
+  to port to the HF client (~200 lines).
+- SCO over HCI itself is standard: with offload=false the stack sends
+  Enhanced Setup Synchronous Connection with data path = HCI; the CYW43455
+  firmware supports it (BlueZ does HFP over the same UART). 3 Mbaud UART is
+  plenty for two 64 kbit/s SCO links plus A2DP.
+- Audio HAL (device/brcm/rpi5/audio = our copy of the AOSP default AIDL HAL):
+  `bluetooth/ModuleBluetooth.cpp` and `DevicePortProxy.cpp` only know the
+  A2DP and hearing-aid session types; `Bluetooth.cpp` keeps ScoConfig/HfpConfig
+  as flags with no streams behind them; the policy XML declares no BT SCO
+  device or mix ports. So even the AG-side software path has nowhere to go
+  until the HAL grows HFP ports (HFP_SOFTWARE_ENCODING/DECODING_DATAPATH
+  sessions from libbluetooth_audio_session, BT SCO in/out device ports, mix
+  ports, routes).
+- The bridge: a phone call needs phone-downlink (SCO#1 decode) -> earbuds
+  (SCO#2 encode) and earbuds-mic (SCO#2 decode) -> phone-uplink (SCO#1
+  encode), full duplex, 8/16 kHz mono. Two SCO links on one CYW43455 is
+  within spec but untested here. Cleanest place for the bridge: inside the
+  audio HAL process (two BluetoothAudioPort proxies cross-wired, no
+  AudioFlinger involvement, lowest latency), with the HAL still exposing the
+  HF side to AudioFlinger so OsmAnd/UI sounds can be mixed into the earbud
+  leg if wanted.
+
+Plan (each step testable on the bench):
+1. HAL: add HFP device/mix ports + the two HFP session types (encode = HAL
+   -> stack, decode = stack -> HAL) in ModuleBluetooth/DevicePortProxy; policy
+   XML routes. Verify with the AG role alone: dash as AG to the earbuds, play
+   a tone to "BT SCO out", hear it in the earbuds (needs
+   bluetooth.profile.hfp.ag.enabled=true + hfp.hf coexistence check in
+   Config.java - none found).
+2. Stack: port the AG software-path hooks into bta_hf_client_sco.cc; verify
+   with the phone alone: call audio arrives as "BT SCO in" and a test tone
+   sent to "BT SCO out" reaches the caller.
+3. Bridge the two inside the HAL; ring/answer/hang-up already work through
+   HfpClientConnectionService + Car Dialer (dial went through tonight).
+4. Fallback if 2 SCO links misbehave on this controller: calls stay
+   phone<->earbuds (the phone owns the AirPods for calls anyway, as Siri
+   showed) and the dash keeps caller ID + answer/decline.
+Estimate: 2-4 bench days. Not started.
+
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
 `UsbService.onSwitchUser` NPE on the android.fg thread at the user-10
