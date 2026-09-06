@@ -1076,6 +1076,29 @@ it should mirror the phone (HeadsetClientStateMachine.getInBandRing()) so
 a phone that does not ring in-band lets the earbuds use their own tone.
 Both offered, not started.
 
+## Incoming call retest OK; received voice "a little poor" (2026-09-06 13:08)
+
+Retest of the incoming path with the three fixes: AirPods rang with the
+iPhone's tone, card on the dash, answered, audio both ways, screen stable.
+Christian: received voice quality "seemed a little poor, like a low
+bitrate". Evidence from the 13-second call: both links mSBC on 2-EV3 (T2),
+so codec and packet type were right. Bridge counters for the active window:
+phone link rx 1823 with 79 flagged corrupt by the radio (4.3%), earbud link
+1801 / 4 (0.2%). The bridge forwarded flagged packets verbatim; an mSBC
+frame's CRC only covers the header, so the AirPods decoded 4% noise frames
+instead of concealing 4% gaps. That is the "low bitrate" sound.
+- Fix (BT patch 0010): the bridge drops packets the controller flags as
+  possibly invalid or missing; the far end sees an H2 sequence gap and runs
+  its packet-loss concealment, which is what Android's own SCO receive path
+  does with such packets.
+- The loss itself: the bench radio was busy - adb over Wi-Fi and my filtered
+  logcat watcher were streaming during the call, and Wi-Fi shares the 43455
+  radio with Bluetooth. On the bike Wi-Fi is idle. Rule already on record:
+  no adb/logcat traffic during listening tests; the watcher is now stopped
+  before asking for a call.
+- Note the SCO handles swap between calls (0x006 was the phone in the
+  morning, the AirPods here); read the address in the "connected" line.
+
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
 `UsbService.onSwitchUser` NPE on the android.fg thread at the user-10
