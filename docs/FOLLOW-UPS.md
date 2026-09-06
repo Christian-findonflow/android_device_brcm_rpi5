@@ -1099,6 +1099,12 @@ instead of concealing 4% gaps. That is the "low bitrate" sound.
 - Note the SCO handles swap between calls (0x006 was the phone in the
   morning, the AirPods here); read the address in the "connected" line.
 
+PATCH RENUMBERING (13:22): the Bluetooth series is now one format-patch per
+commit, 0001-0011: the 8192-frame sink buffer became 0005, so everything
+from the old 0005 up moved by one (old 0008 bridge = 0009, old 0009 in-band
+= 0010, old 0010 drop-corrupt = 0011). Older text above uses the old
+numbers. apply.sh now detects applied patches by commit subject.
+
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
 `UsbService.onSwitchUser` NPE on the android.fg thread at the user-10
