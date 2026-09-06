@@ -970,6 +970,14 @@ from the logs of that call (bridge: "link 0x006: no peer link"):
   the app panel; PhoneButtonController makes the bottom-bar phone button
   open the in-call screen during a call.
 
+11:52 bench after that build: framework overlay STATE_ENABLED, DIALER role =
+com.android.car.dialer, Telecom system dialer = the car Dialer's
+InCallServiceImpl, SystemUI clean, props persisted; AirPods back on A2DP AND
+HFP (AG active device), phone on HF client + A2DP sink. Image v18
+(~/images/...-v18.img.gz, sha 4f366e7c) has everything: call bridge, Dialer
+overlays, chip v2, AndroidCarRpiOverlay. Awaiting Christian's call test of
+the in-call screen and the chip.
+
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
 `UsbService.onSwitchUser` NPE on the android.fg thread at the user-10
