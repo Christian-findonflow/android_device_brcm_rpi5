@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Open the in-call screen full size when a call starts, so an active
+         call is obvious (the toolbar's small "return to call" dot was not). -->
+    <bool name="config_show_fullscreen_incall_ui">true</bool>
+    <!-- Dialer settings only hold heads-up preferences; the gear overlapped
+         the Dialpad tab. Search stays. -->
+    <bool name="config_show_settings_in_menu_items">false</bool>
+    <!-- "Add a favorite" was clipped in a one-column cell. -->
+    <bool name="config_add_favorite_button_span_size_one">false</bool>
+</resources>

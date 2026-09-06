@@ -865,8 +865,67 @@ starts cleanly with no telephony hardware; the phone reconnected as before
 (HF client + A2DP sink + AVRCP + PBAP); the AirPods connected A2DP at
 10:45:50 and then, on their own, opened HFP to the dash's AG at 10:46:14
 (they re-read our SDP, no re-pairing needed) and the AG made them the
-active headset device, in-band ringing off. Unknowns 1-2 (SCO over HCI, two
-eSCO links) still need a real call - waiting on Christian.
+active headset device, in-band ringing off.
+
+CALL TEST PASSED 2026-09-06 10:52 (Christian: "phone call is working great! I
+can hear the recipient and they can hear me"). Both unknowns answered yes: the
+43455 routes SCO over HCI with data path 0x00, and it holds two eSCO links at
+once. Bridge stats over a 3-minute call: phone link 0x006 rx 26000 / tx 25857,
+earbud link 0x007 rx 26000 / tx 26071 in the same windows (identical rates,
+same controller clock), queued 0, dropped 0, 70 orphan packets while the
+earbud link was still coming up, 1.3% of the phone's packets flagged corrupt
+by the radio (0.3% on the earbud link) - forwarded as-is, concealed by the
+far end. Image v16 (sha 900d70d4) has it all baked in.
+
+## Dialer on the small panel + call chip (2026-09-06 11:10, bench check pending)
+
+Christian on the call: "difficult to tell that there is an active call" and
+"search and settings obscure the dialpad". Screenshots: the car-ui toolbar
+(96 dp) plus four 135 dp tabs plus search and settings icons overflow the
+789 dp panel, the keypad's "1 2 3" row hides under the toolbar (4 x 76 dp
+rows + call button do not fit in 469 - 96 dp), the only active-call cue is
+a small blue dot in the Dialer toolbar and a tiny status icon.
+
+Native fix first - the Dialer is a prebuilt (packages/apps/Car/DialerPrebuilt,
+no sources) but declares 1203 overlayable resources, so
+overlay/CarDialerRpiOverlay (static RRO, product partition) sets: toolbar
+64 dp, flexible tabs (share the width), tab icons 28 dp, search stays,
+settings gear dropped (it only holds heads-up preferences), list rows 88 dp
+(four per screen), keypad min 64 dp with 4 dp gaps (repeated in
+values-h456dp because the Dialer ships h456dp variants that would win),
+in-call avatar 120 dp / control bar 72 dp, config_show_fullscreen_incall_ui
+= true so the in-call screen opens full size when a call starts, "Add a
+favorite" spans the row.
+
+Call chip (SystemUI fork): OngoingCallChip + OngoingCallChipController in the
+top bar next to the clock, following the CarSystemBarElement pattern
+(Dagger @ClassKey binding in CarSystemBarModule). Call state from
+TelephonyCallback.CallStateListener - Telecom's PhoneStateBroadcaster
+reports every non-self-managed call, including the phone's calls arriving
+through HfpClientConnectionService. Ringing shows "Incoming call", off-hook
+shows a green pill with the call duration (Chronometer), tap brings the
+Dialer's InCallActivity task forward (ActivityTaskManager + moveTaskToFront;
+the activity itself is not exported) or opens the Dialer. Caller name is not
+shown yet (the Dialer's CallStyle notification carries it - follow-up via
+the notification listener if wanted).
+
+Bench result 11:17: Dialer verified on all four tabs - full keypad visible
+(1-9, *, 0, #, call button), four tabs plus search in one 64 dp row, four
+contact rows per screen, "Add a favorite" whole. Toolbar logo hidden in a
+second pass. In-call screen and the chip need a call (Christian).
+
+RRO LESSON (cost an hour): a static overlay against an app that declares
+`<overlayable name="...">` groups MUST carry `android:targetName="<group>"`,
+and one overlay covers one group only. Without it idmap says "no resources
+were overlaid", `cmd overlay list` shows the overlay as `---` and `cmd
+overlay dump <pkg>` shows STATE_NO_IDMAP - nothing else complains. The Dialer
+has three groups (CarDialerApp, car-ui-lib, CarAppsCommon), hence
+CarDialerRpiOverlay + CarDialerUiRpiOverlay. The same bug had silently
+disabled overlay/CarLauncherRpiOverlay (app-grid sizes for the small panel,
+group CarAppGrid-lib) since 2026-08-30; fixed in the same commit - the app
+grid changes look as a result. Check any new RRO with
+`adb shell cmd overlay dump <overlay pkg> | grep mState` (STATE_ENABLED for
+user 10) or `idmap2 create ... --policy product` by hand.
 
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 

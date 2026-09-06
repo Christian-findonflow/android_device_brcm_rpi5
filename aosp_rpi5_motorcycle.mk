@@ -126,6 +126,8 @@ PRODUCT_PACKAGES += \
     BluetoothRpiOverlay \
     CarActivityResolverOverlay \
     CarLauncherRpiOverlay \
+    CarDialerRpiOverlay \
+    CarDialerUiRpiOverlay \
     CarServiceRpiOverlay \
     CarSystemUIRpiOverlay \
     PermissionControllerOverlay \

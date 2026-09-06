@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tabs share the toolbar width instead of a fixed 135 dp each. -->
+    <bool name="car_ui_toolbar_tab_flexible_layout">true</bool>
+    <!-- The Dialer logo in the toolbar is not a control; its 80 px were
+         squeezing the four tabs. -->
+    <bool name="car_ui_toolbar_show_logo">false</bool>
+</resources>

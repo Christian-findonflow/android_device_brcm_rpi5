@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- NEO dash: the car-ui-lib resources bundled in the car Dialer live in a
+     separate overlayable group ("car-ui-lib"), and one RRO may only target
+     one group, hence a second overlay next to CarDialerRpiOverlay. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.android.car.dialer.carui.rpi.overlay">
+    <overlay android:targetPackage="com.android.car.dialer"
+        android:targetName="car-ui-lib"
+        android:isStatic="true"
+        android:priority="10" />
+</manifest>

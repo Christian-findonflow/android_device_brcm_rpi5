@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- NEO dash: fit the car Dialer (prebuilt, packages/apps/Car/DialerPrebuilt)
+     to the 592x352 px right panel at 120 dpi (789x469 dp). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.android.car.dialer.rpi.overlay">
+    <overlay android:targetPackage="com.android.car.dialer"
+        android:targetName="CarDialerApp"
+        android:isStatic="true"
+        android:priority="10" />
+</manifest>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Dialer ships h456dp variants of these; the panel is 469 dp high so
+     they would win over the plain values. Repeat them here. -->
+<resources>
+    <dimen name="keypad_minimum_size">64dp</dimen>
+    <dimen name="keypad_margin_y">4dp</dimen>
+    <dimen name="keypad_margin_x">12dp</dimen>
+</resources>

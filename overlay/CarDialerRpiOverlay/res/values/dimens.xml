@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- NEO dash: the Dialer's stock sizes assume a tall car screen. The right
+     panel is 469 dp high, so the 96 dp toolbar plus four 76 dp keypad rows and
+     the call button did not fit (the "1 2 3" row hid under the toolbar) and the
+     four tabs plus search and settings overlapped. -->
+<resources>
+
+    <!-- lists: four rows instead of three -->
+    <dimen name="list_item_height">88dp</dimen>
+    <dimen name="list_item_padding">20dp</dimen>
+
+    <!-- dialpad -->
+    <dimen name="keypad_minimum_size">64dp</dimen>
+    <dimen name="keypad_margin_y">4dp</dimen>
+    <dimen name="keypad_margin_x">12dp</dimen>
+    <dimen name="dialpad_info_margin_end">24dp</dimen>
+
+    <!-- in-call screen -->
+    <dimen name="in_call_avatar_icon_size">120dp</dimen>
+    <dimen name="in_call_avatar_icon_size_small">72dp</dimen>
+    <dimen name="in_call_controller_bar_height">72dp</dimen>
+    <dimen name="in_call_app_info_height">56dp</dimen>
+    <dimen name="in_call_margin_between_avatar_and_text">16dp</dimen>
+    <dimen name="in_call_user_profile_margin">24dp</dimen>
+    <dimen name="user_profile_list_item_height">100dp</dimen>
+    <dimen name="large_avatar_icon_size">72dp</dimen>
+</resources>

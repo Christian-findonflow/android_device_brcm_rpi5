@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- NEO dash: app grid sizes for the 592x352 px right panel. The launcher
+     declares overlayable groups, so the target group must be named or the
+     idmap fails silently (STATE_NO_IDMAP) - it did from 2026-08-30 to 09-06. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.android.car.carlauncher.rpi.overlay">
     <overlay android:targetPackage="com.android.car.carlauncher"
+        android:targetName="CarAppGrid-lib"
         android:isStatic="true"
         android:priority="10" />
 </manifest>
