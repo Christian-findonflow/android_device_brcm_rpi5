@@ -704,6 +704,23 @@ unlock and launches the singleTask cockpit twice; harmless). Also seen at every 
 SystemUI `DeadSystemException` on wmshell.main (SystemUI restarts once during
 boot) - not investigated, cosmetic so far.
 
+## Phone reconnect race: phonebook download starves audio and calls (2026-09-06 09:40)
+
+Christian: "sometimes connecting the earbuds doesn't enable the bluetooth
+audio app" - Music screen "Bluetooth audio disconnected" although the AirPods
+were connected. The earbuds were fine; the PHONE's A2DP sink and HF client had
+never come up on that boot. Snoop + logcat: at ACL connect the dash starts
+HFP, A2DP sink, PAN and PBAP together; the PBAP contacts download (vCards
+WITH photos: base64 blobs, 642 contacts, up to 62 kB/s, 30 s) saturates the
+link; the SLC AT round trips take 0.3-0.7 s each and HeadsetClientStateMachine's
+10 s CONNECTING timeout fires (three times, then gives up); the AVDTP
+capability queries crawl at 0.5 s each and the iPhone closes the signalling
+channel ~5 s after opening it. Whether a boot works depends on how fast the
+download happens to run. Fix: patch 0007 - PbapClientService.connect() posts
+the real connect 15 s later (token = device, cancelled on ACL drop /
+disconnect), PROPERTY_PHOTO removed from the vCard filter, HF client
+CONNECTING_TIMEOUT_MS 20 s. Verification pending on the next reboot.
+
 ## Phase 2 scoping: call audio through the dash (written 2026-09-06 00:15)
 
 What exists today, from the code (packages/modules/Bluetooth, device audio HAL):

@@ -1,0 +1,106 @@
+diff --git a/android/app/src/com/android/bluetooth/hfpclient/HeadsetClientStateMachine.java b/android/app/src/com/android/bluetooth/hfpclient/HeadsetClientStateMachine.java
+index 8c6b0e4..bc938ba 100644
+--- a/android/app/src/com/android/bluetooth/hfpclient/HeadsetClientStateMachine.java
++++ b/android/app/src/com/android/bluetooth/hfpclient/HeadsetClientStateMachine.java
+@@ -131,7 +131,9 @@ public class HeadsetClientStateMachine extends StateMachine {
+     static final int TERMINATE_SPECIFIC_CALL = 53;
+ 
+     // Timeouts.
+-    @VisibleForTesting static final int CONNECTING_TIMEOUT_MS = 10000; // 10s
++    // NEO dash: 20 s, not 10. With the phonebook download sharing the link the SLC
++    // took >10 s at half a second per AT round trip and timed out (2026-09-06).
++    @VisibleForTesting static final int CONNECTING_TIMEOUT_MS = 20000; // 20s
+     @VisibleForTesting static final int DISCONNECTING_TIMEOUT_MS = 10000; // 10s
+     private static final int ROUTING_DELAY_MS = 250;
+ 
+diff --git a/android/app/src/com/android/bluetooth/pbapclient/PbapClientService.java b/android/app/src/com/android/bluetooth/pbapclient/PbapClientService.java
+index 77318e4..c98de8a 100644
+--- a/android/app/src/com/android/bluetooth/pbapclient/PbapClientService.java
++++ b/android/app/src/com/android/bluetooth/pbapclient/PbapClientService.java
+@@ -64,6 +64,9 @@ public class PbapClientService extends ConnectableProfile {
+     private final PbapClientContactsStorage mPbapClientContactsStorage;
+     private final Map<BluetoothDevice, PbapClientStateMachine> mPbapClientStateMachineMap;
+     private final Handler mHandler;
++    /** NEO dash: delay before the phonebook download starts after connect(). */
++    @VisibleForTesting static final long CONNECT_DELAY_MS = 15000;
++    private final java.util.Map<BluetoothDevice, Runnable> mDeferredConnects = new java.util.HashMap<>();
+     private final Looper mStateMachinesLooper;
+ 
+     private int mSdpHandle = -1;
+@@ -336,6 +339,7 @@ public class PbapClientService extends ConnectableProfile {
+             return;
+         }
+ 
++        cancelDeferredConnect(device);
+         if (getConnectionState(device) == STATE_CONNECTED) {
+             disconnect(device);
+         }
+@@ -396,7 +400,43 @@ public class PbapClientService extends ConnectableProfile {
+             return false;
+         }
+ 
+-        return addDevice(device);
++        // NEO dash: hold the phonebook download back. Started together with the
++        // other profiles it hogged the link (60 kB/s of vCards for 30 s) while the
++        // hands-free SLC and the A2DP setup were negotiating on it; the phone's
++        // own AVDTP timer and our SLC timer both expired (2026-09-06). Let the
++        // audio profiles have the first seconds; contacts can wait.
++        synchronized (mPbapClientStateMachineMap) {
++            if (mPbapClientStateMachineMap.containsKey(device)) {
++                Log.w(TAG, "Cannot connect " + device + ", already connecting/connected.");
++                return false;
++            }
++        }
++        synchronized (mDeferredConnects) {
++            if (mDeferredConnects.containsKey(device)) {
++                Log.d(TAG, "connect(" + device + "): phonebook download already deferred");
++                return true;
++            }
++            Log.i(TAG, "connect(" + device + "): deferring the phonebook download by "
++                    + CONNECT_DELAY_MS + " ms so hands-free and audio get the link first");
++            Runnable deferred = () -> {
++                synchronized (mDeferredConnects) {
++                    mDeferredConnects.remove(device);
++                }
++                addDevice(device);
++            };
++            mDeferredConnects.put(device, deferred);
++            // The device is the token so an ACL drop or disconnect() can cancel it.
++            mHandler.postDelayed(deferred, device, CONNECT_DELAY_MS);
++        }
++        return true;
++    }
++
++    private void cancelDeferredConnect(BluetoothDevice device) {
++        synchronized (mDeferredConnects) {
++            if (mDeferredConnects.remove(device) != null) {
++                mHandler.removeCallbacksAndMessages(device);
++            }
++        }
+     }
+ 
+     /**
+@@ -410,6 +450,7 @@ public class PbapClientService extends ConnectableProfile {
+         if (device == null) {
+             throw new IllegalArgumentException("Null device");
+         }
++        cancelDeferredConnect(device);
+ 
+         Log.d(TAG, "disconnect(device=" + device.getAddress() + ")");
+         PbapClientStateMachine pbapClientStateMachine = getDeviceStateMachine(device);
+diff --git a/android/app/src/com/android/bluetooth/pbapclient/PbapClientStateMachine.java b/android/app/src/com/android/bluetooth/pbapclient/PbapClientStateMachine.java
+index 3c37cda..f08ecb9 100644
+--- a/android/app/src/com/android/bluetooth/pbapclient/PbapClientStateMachine.java
++++ b/android/app/src/com/android/bluetooth/pbapclient/PbapClientStateMachine.java
+@@ -99,7 +99,10 @@ class PbapClientStateMachine extends StateMachine {
+             PbapApplicationParameters.PROPERTY_VERSION
+                     | PbapApplicationParameters.PROPERTY_FN
+                     | PbapApplicationParameters.PROPERTY_N
+-                    | PbapApplicationParameters.PROPERTY_PHOTO
++                    // NEO dash: no PROPERTY_PHOTO. Contact photos are useless on a
++                    // motorcycle cluster and they were the bulk of a 30 s, 60 kB/s
++                    // download that starved the hands-free and audio setup on the
++                    // same link at connection time (2026-09-06).
+                     | PbapApplicationParameters.PROPERTY_ADR
+                     | PbapApplicationParameters.PROPERTY_TEL
+                     | PbapApplicationParameters.PROPERTY_EMAIL
