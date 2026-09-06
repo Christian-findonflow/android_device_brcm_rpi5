@@ -64,7 +64,11 @@
 
     <!-- Launch HomeCockpitActivity in right TDA on user unlock -->
     <string-array translatable="false" name="config_earlyStartupServices">
-        <item>com.android.car.carlauncher/.HomeCockpitLauncherService#bind=start,user=foreground,trigger=userUnlocked</item>
+        <!-- bind, not start: startService() from CarService throws
+             BackgroundServiceStartNotAllowedException when the launcher uid is
+             momentarily background at unlock (CarService crash-looped 3x on
+             2026-09-06); the service launches the cockpit from onCreate(). -->
+        <item>com.android.car.carlauncher/.HomeCockpitLauncherService#bind=bind,user=foreground,trigger=userUnlocked</item>
     </string-array>
 
     <!-- Disable rearview camera for motorcycle - no backup camera needed -->
