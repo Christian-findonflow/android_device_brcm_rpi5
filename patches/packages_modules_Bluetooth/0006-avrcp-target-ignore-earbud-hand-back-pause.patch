@@ -1,0 +1,99 @@
+diff --git a/android/app/src/com/android/bluetooth/a2dp/A2dpService.java b/android/app/src/com/android/bluetooth/a2dp/A2dpService.java
+index 08cd9d9..52c1bdf 100644
+--- a/android/app/src/com/android/bluetooth/a2dp/A2dpService.java
++++ b/android/app/src/com/android/bluetooth/a2dp/A2dpService.java
+@@ -599,7 +599,7 @@ public class A2dpService extends ConnectableProfile {
+                 .ifPresent(avrcpTarget -> avrcpTarget.sendVolumeChanged(volume));
+     }
+ 
+-    boolean isA2dpPlaying(BluetoothDevice device) {
++    public boolean isA2dpPlaying(BluetoothDevice device) {
+         Log.d(TAG, "isA2dpPlaying(" + device + ")");
+         synchronized (mStateMachines) {
+             A2dpStateMachine sm = mStateMachines.get(device);
+diff --git a/android/app/src/com/android/bluetooth/avrcp/AvrcpTargetService.java b/android/app/src/com/android/bluetooth/avrcp/AvrcpTargetService.java
+index b3ccdbf..f0f418f 100644
+--- a/android/app/src/com/android/bluetooth/avrcp/AvrcpTargetService.java
++++ b/android/app/src/com/android/bluetooth/avrcp/AvrcpTargetService.java
+@@ -22,6 +22,7 @@ import static java.util.Objects.requireNonNull;
+ import static java.util.Objects.requireNonNullElseGet;
+ 
+ import android.annotation.NonNull;
++import android.bluetooth.BluetoothA2dp;
+ import android.bluetooth.BluetoothAdapter;
+ import android.bluetooth.BluetoothDevice;
+ import android.bluetooth.BluetoothProfile;
+@@ -34,6 +35,7 @@ import android.media.AudioAttributes;
+ import android.media.AudioManager;
+ import android.media.AudioPlaybackConfiguration;
+ import android.os.Looper;
++import android.os.SystemClock;
+ import android.os.UserManager;
+ import android.sysprop.BluetoothProperties;
+ import android.text.TextUtils;
+@@ -92,6 +94,9 @@ public class AvrcpTargetService extends ProfileService {
+     private final PlayerSettingsManager mPlayerSettingsManager;
+     private final AudioManager mAudioManager;
+     private final AvrcpBroadcastReceiver mReceiver;
++    // NEO dash: when our A2DP stream to the earbuds last entered PLAYING.
++    private volatile long mLastA2dpPlayingStartMs = 0;
++    private boolean mIgnoringPauseRelease = false;
+     private final AvrcpNativeInterface mNativeInterface;
+     private final AvrcpVolumeManager mVolumeManager;
+     private final boolean mIsVfsCoverArtEnabled;
+@@ -163,6 +168,7 @@ public class AvrcpTargetService extends ProfileService {
+         IntentFilter filter = new IntentFilter();
+         filter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
+         filter.addAction(AudioManager.ACTION_VOLUME_CHANGED);
++        filter.addAction(BluetoothA2dp.ACTION_PLAYING_STATE_CHANGED);
+         registerReceiver(mReceiver, filter);
+     }
+ 
+@@ -206,6 +212,13 @@ public class AvrcpTargetService extends ProfileService {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+             String action = intent.getAction();
++            if (BluetoothA2dp.ACTION_PLAYING_STATE_CHANGED.equals(action)) {
++                if (intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
++                        == BluetoothA2dp.STATE_PLAYING) {
++                    mLastA2dpPlayingStartMs = SystemClock.elapsedRealtime();
++                }
++                return;
++            }
+             if (!action.equals(AudioManager.ACTION_VOLUME_CHANGED)) {
+                 return;
+             }
+@@ -502,6 +515,33 @@ public class AvrcpTargetService extends ProfileService {
+             return;
+         }
+ 
++        // NEO dash: earbuds that also belong to the phone (AirPods after a Siri
++        // prompt or a call on the phone) send PAUSE to us as the phone hands
++        // them back, whether or not we were playing into them. On the dash
++        // that PAUSE is forwarded to the phone and stops the music the rider
++        // just got back. A pause for a stream that is not playing, or that
++        // started within the last 1.5 s, is that hand-back artefact, not the
++        // rider's thumb (2026-09-05 bench).
++        if (KeyEvent.KEYCODE_MEDIA_PAUSE == keyCode && pushed) {
++            boolean playing =
++                    mAdapterService
++                            .getA2dpService()
++                            .map(a2dp -> a2dp.isA2dpPlaying(device))
++                            .orElse(false);
++            long sinceStartMs = SystemClock.elapsedRealtime() - mLastA2dpPlayingStartMs;
++            if (!playing || sinceStartMs < 1500) {
++                Log.w(TAG, "Ignoring PAUSE from " + device + ": our stream to it "
++                        + (playing ? "started " + sinceStartMs + " ms ago" : "is not playing")
++                        + " (earbud hand-back, not a key press)");
++                mIgnoringPauseRelease = true;
++                return;
++            }
++        }
++        if (KeyEvent.KEYCODE_MEDIA_PAUSE == keyCode && !pushed && mIgnoringPauseRelease) {
++            mIgnoringPauseRelease = false;
++            return;
++        }
++
+         // A/V controls should be sent to the addressed player.
+         // We don't have a way to set a media player as the active session so we
+         // keep the active device playing until we receive a PLAY event for the

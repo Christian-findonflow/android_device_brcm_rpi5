@@ -604,8 +604,22 @@ scratchpad `snoop.py`/`snoop3.py`):
   standby - on a phone the app pauses; here the phone keeps streaming. Needs
   a restart path - DONE as patch 0005 (retry START at 2/5/10 s while our sink
   streams; the earbuds' PLAY key never reaches btif_av on this build because
-  the new AVRCP target profile handles it). Bench check pending: earbud
-  out/in, Siri on the phone then dismiss.
+  the new AVRCP target profile handles it). Bench 2026-09-06 00:00:
+  - earbud out/in: NOTHING happens (no AVRCP, no suspend). AirPods report
+    in-ear state only to Apple sources; with the dash as source they are
+    silent. Not a dash fault; generic earbuds send AVRCP PAUSE, which the
+    target forwards to the phone (untested).
+  - Siri: the iPhone opens SCO to the dash for Siri; the HF client turns it
+    into an ACTIVE "unknown call" in Telecom (TC@1, 5 s) - Telecom takes call
+    focus, the sink loses focus; iOS pauses the music itself. When Siri ends
+    the phone resumes, our earbud START waits ~4.5 s for the AirPods (still
+    held by the iPhone), and the AirPods send AVRCP PAUSE to the dash as the
+    iPhone hands them back -> forwarded to the phone -> music stops 500 ms
+    after resuming. Fix: patch 0006 (ignore a PAUSE from a device we are not
+    playing into, or started < 1.5 s ago). Patch 0005's retry did fire but
+    the phone had already paused itself, so it had nothing to do.
+  - Open: the HF client presenting Siri's SCO as a call (dialer UI may pop;
+    check what the screen showed). Real calls are Phase 2 anyway.
 - RESULT 23:41 with patches 0001-0004 on the bike: Christian - "music works
   and is stable, play pause skip etc all working well". Snoop: 43 media
   packets/s to the earbuds sustained for minutes, zero AVDTP drops, phone
