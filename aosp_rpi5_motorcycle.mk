@@ -52,7 +52,10 @@ PRODUCT_PACKAGES += \
 PRODUCT_COPY_FILES += \
     $(DEVICE_PATH)/car/car_audio_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/car_audio_configuration.xml
 
-# Bluetooth - keep for phone/music
+# Bluetooth - phone (HFP client, A2DP sink, AVRCP), earbuds (A2DP source, HFP AG).
+# Call audio: the phone's SCO link is routed over HCI (software datapath) and
+# bridged in the stack to the earbuds' SCO link (bluetooth.neo.sco_bridge,
+# see patches/packages_modules_Bluetooth/0008-*).
 PRODUCT_VENDOR_PROPERTIES += \
     bluetooth.device.class_of_device=38,4,8 \
     bluetooth.profile.asha.central.enabled=false \
@@ -62,7 +65,9 @@ PRODUCT_VENDOR_PROPERTIES += \
     bluetooth.profile.ccp.server.enabled=false \
     bluetooth.profile.csip.set_coordinator.enabled=false \
     bluetooth.profile.hap.client.enabled=false \
-    bluetooth.profile.hfp.ag.enabled=false \
+    bluetooth.profile.hfp.ag.enabled=true \
+    bluetooth.hfp.software_datapath.enabled=true \
+    bluetooth.neo.sco_bridge.enabled=true \
     bluetooth.profile.hid.device.enabled=false \
     bluetooth.profile.hid.host.enabled=false \
     bluetooth.profile.map.server.enabled=false \

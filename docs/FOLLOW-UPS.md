@@ -794,6 +794,80 @@ Plan (each step testable on the bench):
    showed) and the dash keeps caller ID + answer/decline.
 Estimate: 2-4 bench days. Not started.
 
+SUPERSEDED 2026-09-06 11:30 by the section below: the audio-HAL route is not
+needed. The audio framework can only model one "BT SCO" device, so even with
+HFP ports in the HAL the bridge would have been custom code; doing it in the
+stack on the raw HCI payloads is ~200 lines and touches nothing else.
+
+## Phase 2 step 1: in-stack SCO bridge (built 2026-09-06 11:30, bench test pending)
+
+Decision: use the native AAOS/AOSP pieces for everything except the voice
+bytes. What is stock and untouched:
+
+- HF client (dash <- phone): `HfpClientConnectionService` already publishes
+  the phone's calls into Telecom; the car Dialer shows/answers/ends them
+  (proven 2026-09-05).
+- AG (dash -> earbuds): `HeadsetService` + `BluetoothInCallService` forward
+  every Telecom call (the HF client's calls are not "external", so they are
+  included) to the earbuds as HFP indicators: the earbuds ring with their own
+  tone (`isInbandRingingEnabled()` is already false while an HF client is
+  connected - AOSP anticipated a car kit in both roles), a stem press answers
+  or hangs up through Telecom -> HF client -> phone, and the AG opens its
+  SCO link to the earbuds when the call becomes active.
+- Both roles coexist in `Config.java` (independent entries). AG enabled with
+  `bluetooth.profile.hfp.ag.enabled=true` (aosp_rpi5_motorcycle.mk).
+
+What was custom (patch 0008, local commit on packages/modules/Bluetooth):
+
+- `bta/hf_client/bta_hf_client_sco.cc` hardcoded offload=true in all seven
+  `esco_parameters_for_codec()` calls, so the phone's SCO link was set up
+  with data path = PCM (snoop: Enhanced Accept Synchronous Connection with
+  input/output data path 0x01) and the voice went to the controller's unwired
+  PCM pins. Now `hfp_hal_interface::get_offload_enabled()`, i.e. data path =
+  HCI when `bluetooth.hfp.software_datapath.enabled=true`.
+- New `stack/btm/btm_sco_bridge.{h,cc}`: when
+  `bluetooth.neo.sco_bridge.enabled` is set (sampled at each SCO connect),
+  every in-band SCO packet is forwarded to the other connected in-band SCO
+  link (byte ring per link, re-packetised to the destination's packet length,
+  payload copied verbatim so mSBC H2 framing/sequence numbers and the far
+  end's packet-loss concealment are preserved). Same codec required on both
+  links (mSBC is what both the iPhone and AirPods negotiate); a mismatch is
+  logged once and dropped - transcoding is the follow-up if it ever happens.
+  Stats line per link every ~15 s (tag neo_sco_bridge). Hooks:
+  `btm_route_sco_data` (before the single-active-SCO check, which would have
+  dropped the second link's packets), `btm_sco_connected`,
+  `btm_sco_on_disconnected`; `btm_send_sco_packet_to(handle, data)` added.
+
+Controller facts from the snoop (CYW43455, BCM4345C0 fw 003.001.025):
+Read Buffer Size reports 1 SCO buffer of 64 bytes; both links are eSCO 2-EV3,
+7.5 ms interval, 60-byte payloads, mSBC; the dash is central on both. The
+bridge sends one packet out per packet in, so the controller never holds
+more than about one queued voice packet per link. UART load for two links:
+~34 kB/s of ~300 kB/s (A2DP is suspended during a call by `bta_av`).
+
+Unknowns the bench test answers (in order): (1) does the 43455 route SCO
+over HCI when the Enhanced Setup/Accept command says data path 0x00 (BlueZ on
+Pi hardware does this; the fallback is the Broadcom Write_SCO_PCM_Int_Param
+vendor command, routing=1, sent by our BT HAL at init); (2) does it hold two
+eSCO links at once; (3) does `HeadsetService` start cleanly with no telephony
+hardware (`HeadsetPhoneState` talks to TelephonyManager).
+
+Bench procedure: `scratchpad/bench_apex_swap_p2.sh` (push apex, reboot, set
+the three props, restart BT). Then AirPods out of the case (they should now
+also connect HFP to the dash: `Profile: HeadsetService` in dumpsys
+bluetooth_manager shows Connected), phone connected, place a call from the
+Dialer or the phone. Expect two `neo_sco_bridge: link 0x... connected` lines
+and rx/tx counters rising on both. Voice both ways in the AirPods.
+
+Bench bring-up 2026-09-06 10:45 (apex sha bcf138ba..., props set at runtime
+with setprop + BT restart; they are baked into the v16 image): HeadsetService
+starts cleanly with no telephony hardware; the phone reconnected as before
+(HF client + A2DP sink + AVRCP + PBAP); the AirPods connected A2DP at
+10:45:50 and then, on their own, opened HFP to the dash's AG at 10:46:14
+(they re-read our SDP, no re-pairing needed) and the AG made them the
+active headset device, in-band ringing off. Unknowns 1-2 (SCO over HCI, two
+eSCO links) still need a real call - waiting on Christian.
+
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
 `UsbService.onSwitchUser` NPE on the android.fg thread at the user-10

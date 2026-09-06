@@ -1,0 +1,395 @@
+diff --git a/system/bta/hf_client/bta_hf_client_sco.cc b/system/bta/hf_client/bta_hf_client_sco.cc
+index 970d88f..0fd80b6 100644
+--- a/system/bta/hf_client/bta_hf_client_sco.cc
++++ b/system/bta/hf_client/bta_hf_client_sco.cc
+@@ -33,6 +33,7 @@
+ #include "stack/include/bt_hdr.h"
+ #include "stack/include/btm_client_interface.h"
+ #include "stack/include/btm_status.h"
++#include "stack/btm/btm_sco_hfp_hal.h"
+ 
+ #define BTA_HF_CLIENT_NO_EDR_ESCO                                                               \
+   (ESCO_PKT_TYPES_MASK_NO_2_EV3 | ESCO_PKT_TYPES_MASK_NO_3_EV3 | ESCO_PKT_TYPES_MASK_NO_2_EV5 | \
+@@ -119,19 +120,19 @@ static void bta_hf_client_sco_conn_rsp(tBTA_HF_CLIENT_CB* client_cb,
+   if (client_cb->sco_state == BTA_HF_CLIENT_SCO_LISTEN_ST) {
+     if (p_data->link_type == BTM_LINK_TYPE_SCO) {
+       // SCO
+-      resp = esco_parameters_for_codec(SCO_CODEC_CVSD_D1, true);
++      resp = esco_parameters_for_codec(SCO_CODEC_CVSD_D1, hfp_hal_interface::get_offload_enabled());
+     } else if (client_cb->negotiated_codec == BTM_SCO_CODEC_LC3) {
+       // eSCO LC3, HFP 1.9
+-      resp = esco_parameters_for_codec(ESCO_CODEC_LC3_T2, true);
++      resp = esco_parameters_for_codec(ESCO_CODEC_LC3_T2, hfp_hal_interface::get_offload_enabled());
+     } else if (client_cb->negotiated_codec == BTM_SCO_CODEC_MSBC) {
+       // eSCO mSBC
+-      resp = esco_parameters_for_codec(ESCO_CODEC_MSBC_T2, true);
++      resp = esco_parameters_for_codec(ESCO_CODEC_MSBC_T2, hfp_hal_interface::get_offload_enabled());
+     } else if (bta_hf_client_cb_arr.features & BTA_HF_CLIENT_FEAT_ESCO_S4) {
+       // eSCO CVSD, HFP 1.7 requires S4
+-      resp = esco_parameters_for_codec(ESCO_CODEC_CVSD_S4, true);
++      resp = esco_parameters_for_codec(ESCO_CODEC_CVSD_S4, hfp_hal_interface::get_offload_enabled());
+     } else {
+       // eSCO CVSD, S3 is preferred by default(before HFP 1.7)
+-      resp = esco_parameters_for_codec(ESCO_CODEC_CVSD_S3, true);
++      resp = esco_parameters_for_codec(ESCO_CODEC_CVSD_S3, hfp_hal_interface::get_offload_enabled());
+     }
+ 
+     /* tell sys to stop av if any */
+@@ -250,10 +251,10 @@ static void bta_hf_client_sco_create(tBTA_HF_CLIENT_CB* client_cb, bool is_orig)
+   if ((bta_hf_client_cb_arr.features & BTA_HF_CLIENT_FEAT_ESCO_S4) &&
+       (client_cb->peer_features & BTA_HF_CLIENT_PEER_ESCO_S4)) {
+     // eSCO CVSD, HFP 1.7 requires S4
+-    params = esco_parameters_for_codec(ESCO_CODEC_CVSD_S4, true);
++    params = esco_parameters_for_codec(ESCO_CODEC_CVSD_S4, hfp_hal_interface::get_offload_enabled());
+   } else {
+     // eSCO CVSD, S3 is preferred by default(before HFP 1.7)
+-    params = esco_parameters_for_codec(ESCO_CODEC_CVSD_S3, true);
++    params = esco_parameters_for_codec(ESCO_CODEC_CVSD_S3, hfp_hal_interface::get_offload_enabled());
+   }
+ 
+   /* if initiating set current scb and peer bd addr */
+diff --git a/system/stack/Android.bp b/system/stack/Android.bp
+index ce0ba8b..31df784 100644
+--- a/system/stack/Android.bp
++++ b/system/stack/Android.bp
+@@ -142,6 +142,7 @@ cc_library_static {
+         "btm/btm_iso.cc",
+         "btm/btm_main.cc",
+         "btm/btm_sco.cc",
++        "btm/btm_sco_bridge.cc",
+         "btm/btm_sco_hci.cc",
+         "btm/btm_sco_hfp_hal.cc",
+         "btm/btm_sec.cc",
+@@ -1714,6 +1715,7 @@ cc_test {
+         "btm/btm_iso.cc",
+         "btm/btm_main.cc",
+         "btm/btm_sco.cc",
++        "btm/btm_sco_bridge.cc",
+         "btm/btm_sco_hci.cc",
+         "btm/btm_sco_hfp_hal.cc",
+         "btm/btm_sec.cc",
+diff --git a/system/stack/btm/btm_sco.cc b/system/stack/btm/btm_sco.cc
+index 49aa259..0c6b3d3 100644
+--- a/system/stack/btm/btm_sco.cc
++++ b/system/stack/btm/btm_sco.cc
+@@ -26,6 +26,7 @@
+ #define LOG_TAG "btm_sco"
+ 
+ #include "stack/btm/btm_sco.h"
++#include "stack/btm/btm_sco_bridge.h"
+ 
+ #include <bluetooth/log.h>
+ #include <bluetooth/metrics/os_metrics.h>
+@@ -374,6 +375,11 @@ static void btm_route_sco_data(bluetooth::hci::ScoView valid_packet) {
+     return;
+   }
+ 
++  /* NEO dash: with the bridge enabled every in-band SCO packet is forwarded
++   * to the other SCO link instead of the audio server. */
++  if (neo::sco_bridge::enabled() && neo::sco_bridge::route(valid_packet)) {
++    return;
++  }
+   tSCO_CONN* active_sco = btm_get_active_sco();
+   if (active_sco == nullptr) {
+     log::error("Received SCO data when there is no active SCO connection");
+@@ -522,9 +528,15 @@ void btm_send_sco_packet(std::vector<uint8_t> data) {
+   if (active_sco == nullptr || data.empty()) {
+     return;
+   }
++  btm_send_sco_packet_to(active_sco->hci_handle, std::move(data));
++}
++
++void btm_send_sco_packet_to(uint16_t handle_with_flags, std::vector<uint8_t> data) {
++  if (data.empty()) {
++    return;
++  }
+   log::assert_that(data.size() <= BTM_SCO_DATA_SIZE_MAX, "Invalid SCO data size: {}", data.size());
+ 
+-  uint16_t handle_with_flags = active_sco->hci_handle;
+   uint16_t handle = HCID_GET_HANDLE(handle_with_flags);
+   log::assert_that(handle <= HCI_HANDLE_MAX, "Require handle <= 0x{:X}, but is 0x{:X}",
+                    HCI_HANDLE_MAX, handle);
+@@ -1048,6 +1060,7 @@ void btm_sco_connected(const RawAddress& bda, uint16_t hci_handle, tBTM_ESCO_DAT
+ 
+         std::fill(std::begin(btm_pcm_buf), std::end(btm_pcm_buf), 0);
+         bluetooth::audio::sco::open();
++        neo::sco_bridge::on_connected(p);
+       }
+       return;
+     }
+@@ -1314,6 +1327,7 @@ static void btm_sco_on_disconnected(uint16_t hci_handle, tHCI_REASON reason) {
+     }
+ 
+     bluetooth::audio::sco::cleanup();
++    neo::sco_bridge::on_disconnected(hci_handle);
+   }
+ }
+ 
+diff --git a/system/stack/btm/btm_sco.h b/system/stack/btm/btm_sco.h
+index f24bfd1..d1da2d8 100644
+--- a/system/stack/btm/btm_sco.h
++++ b/system/stack/btm/btm_sco.h
+@@ -298,6 +298,8 @@ void btm_sco_disc_chk_pend_for_modechange(uint16_t hci_handle);
+ 
+ /* Send a SCO packet */
+ void btm_send_sco_packet(std::vector<uint8_t> data);
++/* NEO dash: send a SCO packet on a specific link (used by the SCO bridge). */
++void btm_send_sco_packet_to(uint16_t handle_with_flags, std::vector<uint8_t> data);
+ 
+ bool btm_peer_supports_esco_2m_phy(RawAddress remote_bda);
+ bool btm_peer_supports_esco_3m_phy(RawAddress remote_bda);
+diff --git a/system/stack/btm/btm_sco_bridge.cc b/system/stack/btm/btm_sco_bridge.cc
+new file mode 100644
+index 0000000..4f27144
+--- /dev/null
++++ b/system/stack/btm/btm_sco_bridge.cc
+@@ -0,0 +1,202 @@
++/*
++ * NEO dash: in-stack bridge between two in-band (HCI routed) SCO links.
++ * See btm_sco_bridge.h for the design notes.
++ */
++#define LOG_TAG "neo_sco_bridge"
++
++#include "stack/btm/btm_sco_bridge.h"
++
++#include <bluetooth/log.h>
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++#include "osi/include/properties.h"
++#include "stack/btm/btm_int_types.h"
++#include "stack/btm/internal/btm_api.h"
++#include "stack/include/btm_api_types.h"
++#include "stack/include/hcidefs.h"
++
++using namespace bluetooth;
++
++namespace neo::sco_bridge {
++namespace {
++
++constexpr char kProperty[] = "bluetooth.neo.sco_bridge.enabled";
++/* Bytes queued per link: ~16 packets of 60 bytes, well over the jitter
++ * between two eSCO links driven by the same controller clock. */
++constexpr size_t kRingSize = 1024;
++/* 2-EV3 payload used by both mSBC T2 and CVSD S4 links. */
++constexpr size_t kDefaultPktLen = 60;
++/* One statistics line per link roughly every 15 s of 7.5 ms packets. */
++constexpr uint64_t kStatsEveryPkts = 2000;
++
++struct Link {
++  uint16_t handle = HCI_INVALID_HANDLE;
++  size_t pkt_len = 0;  // learned from the first packet received on this link
++  std::array<uint8_t, kRingSize> ring{};
++  size_t head = 0;  // read offset into ring
++  size_t len = 0;   // bytes queued for transmission on this link
++  uint64_t rx = 0;
++  uint64_t tx = 0;
++  uint64_t bad = 0;       // received with a packet status other than "correct"
++  uint64_t orphan = 0;    // received while no peer link existed
++  uint64_t mismatch = 0;  // received while the peer used another codec
++  uint64_t dropped = 0;   // bytes discarded on ring overflow
++
++  void reset(uint16_t h) {
++    *this = Link{};
++    handle = h;
++  }
++
++  void push(const uint8_t* data, size_t n) {
++    if (n > kRingSize) {
++      data += n - kRingSize;
++      n = kRingSize;
++    }
++    if (len + n > kRingSize) {
++      const size_t drop = len + n - kRingSize;
++      head = (head + drop) % kRingSize;
++      len -= drop;
++      dropped += drop;
++    }
++    for (size_t i = 0; i < n; i++) {
++      ring[(head + len + i) % kRingSize] = data[i];
++    }
++    len += n;
++  }
++
++  bool pop(size_t n, std::vector<uint8_t>& out) {
++    if (n == 0 || len < n) {
++      return false;
++    }
++    out.resize(n);
++    for (size_t i = 0; i < n; i++) {
++      out[i] = ring[(head + i) % kRingSize];
++    }
++    head = (head + n) % kRingSize;
++    len -= n;
++    return true;
++  }
++};
++
++bool g_enabled = false;
++std::array<Link, BTM_MAX_SCO_LINKS> g_links;
++
++Link* find_link(uint16_t handle) {
++  if (handle == HCI_INVALID_HANDLE) {
++    return nullptr;
++  }
++  for (auto& link : g_links) {
++    if (link.handle == handle) {
++      return &link;
++    }
++  }
++  return nullptr;
++}
++
++Link* alloc_link(uint16_t handle) {
++  if (Link* link = find_link(handle)) {
++    link->reset(handle);
++    return link;
++  }
++  for (auto& link : g_links) {
++    if (link.handle == HCI_INVALID_HANDLE) {
++      link.reset(handle);
++      return &link;
++    }
++  }
++  return nullptr;
++}
++
++tSCO_CONN* find_peer(const tSCO_CONN* src) {
++  for (auto& conn : btm_cb.sco_cb.sco_db) {
++    if (&conn != src && conn.state == SCO_ST_CONNECTED && conn.is_inband()) {
++      return &conn;
++    }
++  }
++  return nullptr;
++}
++
++void log_stats(const Link& link) {
++  log::info("link 0x{:03x}: rx {} tx {} bad {} orphan {} mismatch {} dropped_bytes {} queued {}",
++            link.handle, link.rx, link.tx, link.bad, link.orphan, link.mismatch, link.dropped,
++            link.len);
++}
++
++}  // namespace
++
++bool enabled() { return g_enabled; }
++
++void on_connected(const tSCO_CONN* p_sco) {
++  g_enabled = osi_property_get_bool(kProperty, false);
++  if (!g_enabled) {
++    return;
++  }
++  Link* link = alloc_link(p_sco->hci_handle);
++  log::info("link 0x{:03x} {} codec {} connected{}", p_sco->hci_handle, p_sco->esco.data.bd_addr,
++            sco_codec_type_text(p_sco->get_codec_type()), link ? "" : " (no bridge slot)");
++}
++
++void on_disconnected(uint16_t hci_handle) {
++  Link* link = find_link(hci_handle);
++  if (link == nullptr) {
++    return;
++  }
++  log_stats(*link);
++  link->reset(HCI_INVALID_HANDLE);
++}
++
++bool route(const hci::ScoView& packet) {
++  if (!g_enabled) {
++    return false;
++  }
++  const uint16_t handle = packet.GetHandle();
++  Link* src = find_link(handle);
++  if (src == nullptr) {
++    /* A link that connected before the bridge was enabled: leave it to the
++     * stock path. */
++    return false;
++  }
++  const auto data = packet.GetData();
++  src->rx++;
++  if (src->pkt_len == 0 && !data.empty()) {
++    src->pkt_len = data.size();
++  }
++  if (packet.GetPacketStatusFlag() != hci::PacketStatusFlag::CORRECTLY_RECEIVED) {
++    src->bad++;
++  }
++
++  tSCO_CONN* src_conn = btm_cb.sco_cb.get_sco_connection_from_handle(handle);
++  tSCO_CONN* dst_conn = src_conn != nullptr ? find_peer(src_conn) : nullptr;
++  if (dst_conn == nullptr) {
++    if (src->orphan++ == 0) {
++      log::info("link 0x{:03x}: no peer link, dropping voice packets", handle);
++    }
++  } else if (src_conn->get_codec_type() != dst_conn->get_codec_type()) {
++    if (src->mismatch++ == 0) {
++      log::warn("link 0x{:03x} ({}) -> 0x{:03x} ({}): codec mismatch, not bridged", handle,
++                sco_codec_type_text(src_conn->get_codec_type()), dst_conn->hci_handle,
++                sco_codec_type_text(dst_conn->get_codec_type()));
++    }
++  } else if (Link* dst = find_link(dst_conn->hci_handle)) {
++    dst->push(data.data(), data.size());
++    const size_t out_len = dst->pkt_len != 0 ? dst->pkt_len
++                           : src->pkt_len != 0 ? src->pkt_len
++                                               : kDefaultPktLen;
++    std::vector<uint8_t> out;
++    while (dst->pop(out_len, out)) {
++      btm_send_sco_packet_to(dst->handle, out);
++      dst->tx++;
++    }
++  }
++
++  if (src->rx % kStatsEveryPkts == 0) {
++    log_stats(*src);
++  }
++  return true;
++}
++
++}  // namespace neo::sco_bridge
+diff --git a/system/stack/btm/btm_sco_bridge.h b/system/stack/btm/btm_sco_bridge.h
+new file mode 100644
+index 0000000..d5e0217
+--- /dev/null
++++ b/system/stack/btm/btm_sco_bridge.h
+@@ -0,0 +1,41 @@
++/*
++ * NEO dash: in-stack bridge between two in-band (HCI routed) SCO links.
++ *
++ * The dash sits between a phone (we are the HFP hands-free client) and a pair
++ * of earbuds (we are the HFP audio gateway).  Neither the Android audio
++ * framework nor the Bluetooth audio HAL can represent two concurrent SCO
++ * links, so the voice packets are forwarded here, directly on the HCI
++ * payloads: whatever is received on one link is queued for transmission on
++ * the other.  Both links must use the same codec (mSBC or CVSD); the payload
++ * is copied verbatim so for mSBC the H2 framing and sequence numbers are
++ * preserved and the far end's own packet loss concealment keeps working.  A
++ * byte ring per link re-packetises when the two links use different packet
++ * lengths.
++ *
++ * Enabled by the property bluetooth.neo.sco_bridge.enabled, sampled each time
++ * a SCO link connects.  When enabled the bridge owns every in-band SCO
++ * packet; packets with no peer link are dropped.
++ */
++#pragma once
++
++#include <cstdint>
++
++#include "hci/hci_packets.h"
++#include "stack/btm/btm_sco.h"
++
++namespace neo::sco_bridge {
++
++/* True when the bridge was enabled at the time the last SCO link connected. */
++bool enabled();
++
++/* Called from btm_sco_connected() for every in-band SCO link. */
++void on_connected(const tSCO_CONN* p_sco);
++
++/* Called from the SCO disconnect handler with the HCI handle that went away. */
++void on_disconnected(uint16_t hci_handle);
++
++/* Route one received SCO packet.  Returns true when the packet was consumed
++ * (forwarded or dropped) and must not reach the audio-server path. */
++bool route(const bluetooth::hci::ScoView& packet);
++
++}  // namespace neo::sco_bridge
