@@ -927,6 +927,49 @@ grid changes look as a result. Check any new RRO with
 `adb shell cmd overlay dump <overlay pkg> | grep mState` (STATE_ENABLED for
 user 10) or `idmap2 create ... --policy product` by hand.
 
+11:30 Christian: chip stuck after hang-up, and two calls with no audio.
+- No audio = my process error: the three Phase 2 props were set with setprop
+  and every Dialer/SystemUI reboot reset them (AG off, SCO back on the PCM
+  path). Now appended to /vendor/build.prop on the bench; the v16/v17
+  images have them in aosp_rpi5_motorcycle.mk anyway.
+- Chip stuck = real bug: TelephonyRegistry.validateEventAndUserLocked only
+  delivers TelephonyCallback events to listeners of the FOREGROUND user;
+  SystemUI is user 0, the dash runs user 10, so the chip only ever got the
+  state replayed at registration. Rewritten on the
+  ACTION_PHONE_STATE_CHANGED broadcast (sent to UserHandle.ALL, carries the
+  number for READ_PRIVILEGED_PHONE_STATE holders). Christian's spec: the
+  in-call screen should appear on a call, be dismissable (map in front),
+  and come back from the chip; the chip should say who and for how long and
+  offer hang-up. Chip v2: name (PhoneLookup in the current user's contacts,
+  i.e. the PBAP phone book) or number, duration since off-hook, tap opens
+  InCallActivity directly (SystemUI holds START_ANY_ACTIVITY), red button =
+  TelecomManager.endCall() (MODIFY_PHONE_STATE). Bench check pending.
+
+11:36 second "no audio" report - two more pre-existing causes, both found
+from the logs of that call (bridge: "link 0x006: no peer link"):
+- The AirPods' HEADSET (AG) connection policy was UNKNOWN (-1): they were
+  bonded while the AG profile was disabled, so PhonePolicy never set it
+  (that happens on the UUID fetch at bond time) and the dash never initiates
+  HFP to them. At 10:46 they had initiated it themselves; after the 11:34
+  reboot they did not. Fixed on the bench with the Car Settings toggle
+  (AirPods > Profiles > Phone calls) which sets ALLOWED (100); from then on
+  PhonePolicy connects HFP after A2DP on every reconnect. On the bike a
+  fresh flash re-pairs with the AG present, so the policy is set at bond.
+- No default dialer: the framework's config_defaultDialer is
+  com.android.dialer (the phone Dialer, not in this image) and
+  AndroidRpiOverlay sets config_voice_capable=false, which makes the DIALER
+  role unavailable ("Role is unavailable: android.app.role.DIALER"). Telecom's
+  system dialer resolved to com.android.dialer/...car.dialer...InCallServiceImpl,
+  a package that does not exist, so the car Dialer's InCallService was NEVER
+  bound: no in-call screen at any point today, and config_show_fullscreen_
+  incall_ui could not have any effect. Only BluetoothInCallService was bound.
+  Fix: overlay/AndroidCarRpiOverlay (car + motorcycle products only, priority
+  1 over AndroidRpiOverlay): config_defaultDialer=com.android.car.dialer
+  (same as device/generic/car) and config_voice_capable=true.
+- Chip v3 in the same build: hides while a Dialer screen is the top task of
+  the app panel; PhoneButtonController makes the bottom-bar phone button
+  open the in-call screen during a call.
+
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
 `UsbService.onSwitchUser` NPE on the android.fg thread at the user-10

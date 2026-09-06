@@ -123,6 +123,7 @@ PRODUCT_COPY_FILES += \
 # Overlays
 PRODUCT_PACKAGES += \
     AndroidRpiOverlay \
+    AndroidCarRpiOverlay \
     BluetoothRpiOverlay \
     CarActivityResolverOverlay \
     CarLauncherRpiOverlay \

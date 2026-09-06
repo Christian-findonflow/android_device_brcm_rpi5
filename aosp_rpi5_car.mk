@@ -115,6 +115,7 @@ PRODUCT_PACKAGES += \
 # Overlays
 PRODUCT_PACKAGES += \
     AndroidRpiOverlay \
+    AndroidCarRpiOverlay \
     BluetoothRpiOverlay \
     CarActivityResolverOverlay \
     CarServiceRpiOverlay \

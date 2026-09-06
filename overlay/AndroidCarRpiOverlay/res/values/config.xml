@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- NEO dash: the framework default dialer is the phone Dialer
+     (com.android.dialer), which this image does not ship, so no app held the
+     DIALER role and Telecom's "system dialer" pointed at a package that does
+     not exist: the car Dialer's in-call screen was never bound and no active
+     call ever showed (found 2026-09-06). Same value as device/generic/car. -->
+<resources>
+    <string name="config_defaultDialer" translatable="false">com.android.car.dialer</string>
+    <!-- AndroidRpiOverlay says the Pi is not voice capable, which makes the
+         DIALER role unavailable ("Role is unavailable: android.app.role.DIALER").
+         With the phone's calls arriving over the Bluetooth hands-free client
+         the dash is voice capable, as AAOS reference devices are. -->
+    <bool name="config_voice_capable">true</bool>
+</resources>
