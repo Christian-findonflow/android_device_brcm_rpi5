@@ -618,8 +618,12 @@ scratchpad `snoop.py`/`snoop3.py`):
     after resuming. Fix: patch 0006 (ignore a PAUSE from a device we are not
     playing into, or started < 1.5 s ago). Patch 0005's retry did fire but
     the phone had already paused itself, so it had nothing to do.
-  - Open: the HF client presenting Siri's SCO as a call (dialer UI may pop;
-    check what the screen showed). Real calls are Phase 2 anyway.
+  - Retest with 0006 (00:09): music comes back and stays. Siri's SCO shows
+    on the dash as the green microphone privacy indicator plus a brief
+    screen refresh (the in-call UI starting and finishing with the 2 s
+    "unknown call"). Telecom also logs a bogus emergency InCallService
+    component (com.android.dialer/com.android.car.dialer...) it cannot find -
+    noise, note for the dialer clean-up. Real calls are Phase 2.
 - RESULT 23:41 with patches 0001-0004 on the bike: Christian - "music works
   and is stable, play pause skip etc all working well". Snoop: 43 media
   packets/s to the earbuds sustained for minutes, zero AVDTP drops, phone
