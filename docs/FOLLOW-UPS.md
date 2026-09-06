@@ -1023,6 +1023,7 @@ dated 2025-12-26 (from the original checkout, not ours) - harmless, left.
 Everything else is either a fork (Launcher, SystemUI, Car services,
 LatinIME, rpi5 device tree) or clean. Rule going forward: run `repo status`
 before cutting an image; anything modified outside a fork must be a patch.
+Image v19 (~/images/...-v19.img.gz, sha efbb39e5, 12:40) = v18 + this fix.
 
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
