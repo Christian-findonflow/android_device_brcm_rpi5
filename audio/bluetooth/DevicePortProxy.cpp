@@ -42,8 +42,13 @@ namespace android::bluetooth::audio::aidl {
 
 namespace {
 
-// The maximum time to wait in std::condition_variable::wait_for()
-constexpr unsigned int kMaxWaitingTimeMs = 4500;
+// The maximum time to wait in std::condition_variable::wait_for().
+// NEO dash: AOSP uses 4500 ms. When the Bluetooth stack cannot start the
+// A2DP stream (it refuses while a SCO voice link is up, e.g. a ring tone
+// routed to the earbuds during an incoming call) two back-to-back waits held
+// AudioFlinger past its 5 s watchdog, the audio HALs were killed and
+// audioserver restarted (2026-09-06). A real start takes well under a second.
+constexpr unsigned int kMaxWaitingTimeMs = 1500;
 
 }  // namespace
 

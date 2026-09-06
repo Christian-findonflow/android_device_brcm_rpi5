@@ -1025,6 +1025,44 @@ LatinIME, rpi5 device tree) or clean. Rule going forward: run `repo status`
 before cutting an image; anything modified outside a fork must be a patch.
 Image v19 (~/images/...-v19.img.gz, sha efbb39e5, 12:40) = v18 + this fix.
 
+## First incoming call (2026-09-06 12:42): no ring in the earbuds, screen "broke"
+
+Christian: the heads-up with the caller and Answer appeared, no ring in the
+AirPods, then the display went to "some kind of full screen with the maps"
+until the call ended. Logs:
+- 12:41:59 incoming call -> audio mode RINGTONE, a ring-tone track created
+  (the Dialer's incoming-call notification sound); the policy routed it to
+  the AirPods' A2DP output; the stack refuses to start A2DP while a SCO link
+  is up (the iPhone had opened its in-band-ringtone SCO at 12:42:00, bridge:
+  "no peer link"); our audio HAL's BluetoothAudioPort start() waited 4.5 s,
+  twice; AudioFlinger's 5 s TimeCheck fired ("requesting tombstone" for the
+  audio HAL and effect HAL pids) -> audioserver restarted.
+- 12:42:06 CarAudioService crashed on onAudioServerUp -> release ->
+  unregisterVolumeAndMuteReceiver "Receiver not registered" (AOSP bug:
+  released on every down/up cycle, registered once) -> CarService died ->
+  SystemUI died with it, restarted, crashed again in
+  AutoTaskRepository.onTaskChanged (CarActivityManager null while the car
+  service was still coming back), restarted. That is the "full screen with
+  the map": no system bars for ~4 s.
+- No ring: HeadsetService.isInbandRingingEnabled() is false whenever a
+  hands-free client is connected (AOSP: a car kit cannot source the ring
+  tone), so the AG did not open the earbud SCO while ringing and AirPods,
+  which have no local ring tone, stayed silent. The iPhone's in-band ring
+  tone was arriving on the phone link the whole time.
+
+Fixes (built 12:55, bench check pending):
+- Bluetooth patch 0009: keep in-band ringing on with an HF client connected
+  (the bridge forwards the phone's in-band ring). Telecom's
+  BluetoothDeviceManager then connects the AG audio during ringing.
+- packages/services/Car (fork): catch IllegalArgumentException in
+  releaseLegacyVolumeAndMuteReceiverLocked so an audioserver restart no
+  longer kills CarService (and SystemUI with it).
+- device audio HAL: kMaxWaitingTimeMs 4500 -> 1500 ms in
+  audio/bluetooth/DevicePortProxy.cpp so a refused A2DP start cannot hold
+  AudioFlinger past its watchdog.
+- Not fixed: the SystemUI AutoTaskRepository NPE (source is not in the
+  tree, prebuilt WM Shell automotive lib); moot once CarService stops dying.
+
 ## system_server crashes once at EVERY boot (confirmed 2026-09-05)
 
 `UsbService.onSwitchUser` NPE on the android.fg thread at the user-10

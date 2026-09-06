@@ -1,0 +1,36 @@
+diff --git a/android/app/src/com/android/bluetooth/hfp/HeadsetService.java b/android/app/src/com/android/bluetooth/hfp/HeadsetService.java
+index a33d313..c1a7d7c 100644
+--- a/android/app/src/com/android/bluetooth/hfp/HeadsetService.java
++++ b/android/app/src/com/android/bluetooth/hfp/HeadsetService.java
+@@ -2009,11 +2009,16 @@ public class HeadsetService extends ConnectableProfile {
+             }
+         }
+ 
++        // NEO dash: AOSP turns in-band ringing off while a hands-free client is
++        // connected because a car kit cannot source the ring tone itself. The dash
++        // bridges the phone's SCO link to the earbuds' SCO link, so the phone's own
++        // in-band ring tone (iPhones always ring in-band) reaches the earbuds as
++        // long as the earbud link is open while ringing - which is exactly what
++        // in-band ringing makes Telecom do. AirPods have no local ring tone.
+         return isInbandRingingSupported
+                 && !SystemProperties.getBoolean(DISABLE_INBAND_RINGING_PROPERTY, false)
+                 && !mInbandRingingRuntimeDisable
+-                && inbandRingtoneAllowedByPolicy
+-                && !isHeadsetClientConnected();
++                && inbandRingtoneAllowedByPolicy;
+     }
+ 
+     private boolean isHeadsetClientConnected() {
+@@ -2063,9 +2068,9 @@ public class HeadsetService extends ConnectableProfile {
+         synchronized (mStateMachines) {
+             final boolean inbandRingingRuntimeDisable = mInbandRingingRuntimeDisable;
+ 
+-            if (getConnectedDevices().size() > 1
+-                    || isHeadsetClientConnected()
+-                    || mActiveDevice == null) {
++            // NEO dash: a connected hands-free client no longer disables in-band
++            // ringing (see isInbandRingingEnabled()).
++            if (getConnectedDevices().size() > 1 || mActiveDevice == null) {
+                 mInbandRingingRuntimeDisable = true;
+             } else {
+                 mInbandRingingRuntimeDisable = false;
