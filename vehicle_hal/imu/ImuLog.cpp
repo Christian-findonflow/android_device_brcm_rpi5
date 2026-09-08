@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 namespace android::hardware::automotive::vehicle::motorcycle::imu {
 
@@ -16,7 +17,11 @@ namespace {
 constexpr const char* kHeader =
         "# motodash imu log v1 | I t ax ay az(g) gx gy gz(deg/s) speed(m/s) speedValid "
         "roll pitch(deg, live estimate) status | B t pressure(Pa) temp(C)\n";
-constexpr int64_t kSyncIntervalNs = 1000000000LL;
+// Flush every 5 s from a helper thread: fdatasync on the sampling thread
+// stalled it for 50-260 ms about every 46 s on the bench (ext4 journal),
+// i.e. holes in the gyro integration. Key-off is a power cut, so keep
+// flushing - just never on the thread that reads the sensor.
+constexpr int64_t kSyncIntervalNs = 5000000000LL;
 }  // namespace
 
 ImuLogWriter::~ImuLogWriter() {
@@ -69,10 +74,20 @@ bool ImuLogWriter::writeLine(const char* line, int len) {
 }
 
 void ImuLogWriter::syncIfDue(int64_t nowNs) {
-    if (mFd >= 0 && nowNs - mLastSyncNs > kSyncIntervalNs) {
-        fdatasync(mFd);
-        mLastSyncNs = nowNs;
+    if (mFd < 0 || nowNs - mLastSyncNs <= kSyncIntervalNs) return;
+    mLastSyncNs = nowNs;
+    bool expected = false;
+    if (!mSyncInFlight->compare_exchange_strong(expected, true)) return;  // previous one still running
+    int fd = dup(mFd);
+    if (fd < 0) {
+        *mSyncInFlight = false;
+        return;
     }
+    std::thread([fd, flag = mSyncInFlight] {
+        fdatasync(fd);
+        ::close(fd);
+        *flag = false;
+    }).detach();
 }
 
 void ImuLogWriter::close() {

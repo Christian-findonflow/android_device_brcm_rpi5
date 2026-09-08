@@ -1116,3 +1116,12 @@ boot, restarts audioserver (which is why the audio HAL rename mattered) and
 leaves tombstones on every boot. Fix the gadget HAL crash (or drop the
 gadget HAL: the dash never acts as a USB device on the bike; dwc2 is in
 peripheral mode only for adb over USB-C on the bench).
+
+## Lean sensor on the board (2026-09-08 11:15)
+
+ISM330DHCX + BMP280 arrived and sit on the CAN HAT's Grove port; Christian
+levelled it, raw axes and altitude live. Bench numbers and the two HAL fixes
+(100 Hz pacing, log flush off the sampling thread) are in TESTING.md "Lean
+sensor". Still needs the first ride: forward axis self-learn, lean sign in
+the first corners, ride max lean; then pull /data/vendor/motodash/imu-*.log
+and replay on the host to tune the filter.

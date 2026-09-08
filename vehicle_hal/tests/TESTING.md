@@ -298,6 +298,24 @@ source loss.
    backwards: Clear calibration, Level again and pull away hard in a straight
    line (braking also teaches it, with the sign handled).
 
+**Bench bring-up done 2026-09-08 (steps 1-5 pass).** HAL log: "IMU:
+ISM330DHCX family (WHO_AM_I 0x6B) on /dev/i2c-1, barometer present"; Level
+persisted (`persist.vendor.motodash.imu.up` -0.049,-0.025,0.998, sensor
+lying nearly flat); status 7 = present | baro | level set. From a 76-minute
+bench log replayed on the host: quietest 5 min gyro noise 0.03-0.05 dps,
+accel < 0.001 g, |a| = 1.016 g, gyro offsets +0.29/-0.70/-0.32 dps (learned
+at the first CAN-speed-valid standstill - the bench never sees speedValid,
+so "gyro bias learned 0.00" in the replay is expected there); barometer
+0.8 m jitter / 20 min, 3.6 m weather drift / 76 min; 176 hand-tilt episodes
+up to 70 deg visible. Two HAL fixes came out of it: the loop slept a fixed
+10 ms after each read (94.6 Hz) - now absolute 10 ms deadlines (100.0 Hz,
+max dt 14 ms over 3 min); and the once-a-second fdatasync on the sampling
+thread stalled it 50-260 ms about every 46 s (ext4 journal) - now a helper
+thread every 5 s (zero gaps > 20 ms after). Note /vendor is ext4 on the
+current images, so the HAL binary CAN be pushed (`mount -o remount,rw
+/vendor`, push, `stop`/`start vendor.vehicle-hal-motorcycle`); the erofs
+note in section 3 dates from the KonstaKANG base image.
+
 ## First live capture on the bike (2026-09-05) - what the bus really says
 
 Recorded with the Workshop capture switch, bike on, stationary, then a guided

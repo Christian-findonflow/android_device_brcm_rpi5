@@ -13,6 +13,7 @@
 #include <VehicleUtils.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -392,6 +393,7 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     // reader's blocking read() is unblocked separately via shutdown() on the
     // socket in the destructor.
     bool sleepUnlessStopping(int64_t ms);
+    bool sleepUntilUnlessStopping(std::chrono::steady_clock::time_point deadline);
     std::mutex mShutdownMutex;
     std::condition_variable mShutdownCv;
     // Verbose CAN frame logging, persist.vendor.motodash.debug.canlog.

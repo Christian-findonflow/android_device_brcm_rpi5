@@ -761,6 +761,13 @@ bool MotorcycleVehicleHardware::sleepUnlessStopping(int64_t ms) {
     return mRunning;
 }
 
+bool MotorcycleVehicleHardware::sleepUntilUnlessStopping(
+        std::chrono::steady_clock::time_point deadline) {
+    std::unique_lock<std::mutex> lock(mShutdownMutex);
+    mShutdownCv.wait_until(lock, deadline, [this] { return !mRunning; });
+    return mRunning;
+}
+
 bool MotorcycleVehicleHardware::openCanSocket() {
     mCanSocket = socket(PF_CAN, SOCK_RAW, CAN_RAW);
     if (mCanSocket < 0) {
@@ -2838,9 +2845,13 @@ void MotorcycleVehicleHardware::imuThread() {
     std::unique_ptr<imu::ImuSource> source;
     int64_t nextProbeNs = 0;
     bool loggedAbsent = false;
+    // Absolute tick schedule: sleeping a fixed 10 ms after each read gave
+    // 94.6 Hz on the bench (read + log time added to every period).
+    std::chrono::steady_clock::time_point nextTick{};
     while (mRunning) {
         int64_t now = elapsedRealtimeNano();
         if (!source) {
+            nextTick = {};
             if (now >= nextProbeNs) {
                 nextProbeNs = now + kImuProbeNs;
                 source = openImuSource();
@@ -2897,7 +2908,11 @@ void MotorcycleVehicleHardware::imuThread() {
                 }
             }
         }
-        if (!sleepUnlessStopping(kImuPeriodMs)) break;
+        auto nowTick = std::chrono::steady_clock::now();
+        if (nextTick == std::chrono::steady_clock::time_point{}) nextTick = nowTick;
+        nextTick += std::chrono::milliseconds(kImuPeriodMs);
+        if (nextTick < nowTick) nextTick = nowTick + std::chrono::milliseconds(kImuPeriodMs);
+        if (!sleepUntilUnlessStopping(nextTick)) break;
     }
 }
 

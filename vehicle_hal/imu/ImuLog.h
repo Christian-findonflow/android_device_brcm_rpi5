@@ -12,7 +12,9 @@
  */
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <fstream>
 #include <string>
 
@@ -60,6 +62,8 @@ class ImuLogWriter {
     std::string mPath;
     uint64_t mBytes = 0;
     int64_t mLastSyncNs = 0;
+    // Shared with the detached flush thread, which may outlive this writer.
+    std::shared_ptr<std::atomic<bool>> mSyncInFlight = std::make_shared<std::atomic<bool>>(false);
     bool mCapped = false;
 };
 
