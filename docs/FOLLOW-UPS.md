@@ -1318,3 +1318,60 @@ Findings:
 - Slog.d lines from SystemUI's wm package are in the SYSTEM log buffer
   (logcat -b system), not main.
 
+## Sunlight readability: day theme and cluster typography (2026-09-11 evening)
+
+Asked for after the Display 2 discussion ("speed and other info in direct
+sunlight"). Implemented in the launcher fork (neo-car-launcher), verified on
+the cuttlefish harness at 800x480/120 dpi with the synthetic ride replay and
+the IMU scenario file (lean 22 deg), day <-> night flipped with
+`cmd car_service day-night-mode day|night`, no crashes:
+- Day/night palette: values/neo_colors.xml is now the DAY set (near-white
+  ground, dark ink, darker accents), values-night/neo_colors.xml the
+  original night set (secondary text brightened to #A6B1BF). MotorcycleTheme
+  constants are resolved from resources by MotorcycleTheme.load(Context)
+  (called in HomeCockpitActivity.onCreate and the fragment's onCreateView);
+  the fragment's and cockpit's hard-coded hex colours went to the palette;
+  gear_indicator_bg uses neo_surface_*; neo_logo.png has a dark day variant
+  (drawable/) and the white one moved to drawable-night/.
+- Who decides day/night: the VHAL has no NIGHT_MODE, so CarNightService
+  stayed in night mode for ever (that is why the whole dash was dark).
+  NightBrightnessController (already computing solar elevation from the
+  last GPS fix for the backlight) now also writes CarSettings.Global
+  FORCED_DAY_NIGHT_MODE: day while the sun is up, night from sunset;
+  CarNightService applies it through UiModeManager so every app, the bars
+  and our palette switch together. Rider settings gained "Day / night:
+  Sun / Day / Night" (DashPreferences theme mode; Day/Night apply at once).
+  Launcher manifest: WRITE_SECURE_SETTINGS. On cuttlefish the fake GPS is
+  in California, so the controller picked day by itself at 22:00 UK time -
+  expected. If a light sensor ever arrives, the native path is the VHAL
+  NIGHT_MODE property and this override goes away.
+- The cluster strip is hosted by the AOSP CarLauncher activity, which has
+  uiMode in configChanges and only re-inflates its home cards: the strip
+  kept the old palette on a flip. CarLauncher.onConfigurationChanged now
+  recreate()s when the night bit changes (once per sunset/sunrise). That
+  exposed a latent bug: a queued updateUI() of the detached old fragment
+  called getResources() -> crash. updateUI() now returns unless isAdded()
+  and the handler is cleared in onStop.
+- Typography (motorcycle_dashboard.xml; 208 px strip, 0.18 mm/px): speed
+  124sp thin -> 150sp sans-serif-condensed bold, tabular figures (~14 mm
+  digits, three digits still fit); unit 13 -> 16sp; gear 42 -> 58sp in an
+  88dp badge, mode 9 -> 12sp; battery 21 -> 30sp, range 12 -> 15sp; fault
+  and side-stand text 12 -> 16sp, fault icon 16 -> 22dp; nav distance
+  21 -> 28sp, glyph 34 -> 40sp; turn arrows 26 -> 30sp; bars thicker. Lean
+  indicator 46dp and hidden while a fault/side-stand banner is up (a
+  warning outranks the arc on this short strip), which keeps the strip
+  inside the 351 px between the bars with one banner.
+- Backlight (Christian's question): already handled - the same controller
+  dims to the Rider "After dark" level below civil twilight with a linear
+  ramp through twilight, day = 255. Not yet verified on the bike; check
+  the sysfs backlight follows Settings brightness (light HAL
+  com.android.hardware.light.rpi5).
+- Not done / follow-ups: SystemUI bars stay dark in day mode (AAOS
+  default; a light day variant would help in sun); Rider/Dash settings and
+  Maintenance screens keep their fixed dark look; speed-driven
+  simplification and a light sensor remain on the list. The emulator-only
+  android.car.cluster sample crashes on INFO_FUEL_CAPACITY (not shipped on
+  the Pi). `adb install -r` of the launcher makes CarService's
+  VendorServiceController throw BackgroundServiceStartNotAllowed once
+  (restarts itself) - push to /system on the Pi as before.
+
