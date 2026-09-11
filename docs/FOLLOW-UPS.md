@@ -1375,3 +1375,32 @@ the IMU scenario file (lean 22 deg), day <-> night flipped with
   VendorServiceController throw BackgroundServiceStartNotAllowed once
   (restarts itself) - push to /system on the Pi as before.
 
+## Emulator test pass on the full image (2026-09-11 late)
+
+Lesson first: WRITE_SECURE_SETTINGS (needed for the day/night switch) is
+signature|privileged and both builds run ro.control_privapp_permissions=
+enforce; without an entry in permissions/privapp-permissions-neo.xml
+system_server aborts at boot ("not in privileged permission allowlist")
+and the zygote loops. Caught by the first full cuttlefish build; v26 had
+been cut before the fix and was DELETED (never flash it); v27 replaces it
+(device tree 618724a). Rule: any new privileged permission in a manifest
+needs the allowlist line in the same commit.
+
+The emulator only mirrors the device after a FULL `m` for aosp_cf_moto;
+until tonight its image was from 09-05 (hence the "Settings back button
+overflows again" false alarm - the Pi build had the fix all along). Its
+instance comes up 1080x600 regardless of launch flags; `wm size 800x480;
+wm density 120`, sync, reboot gives the Pi geometry (the split display
+areas are computed at boot). Fake GPS = California.
+
+Results on the rebuilt image (launcher c18d5c91 + tweak, device tree
+618724a), 800x480: day/night on home both ways; Car Settings Wi-Fi page
+back arrow inside the panel in both themes (Car Settings itself keeps its
+dark styling); ride replay with the IMU scenario in day and night (55 km/h,
+22 deg R, D / MODE 1); e2e_can_test.sh 38/38; Rider settings Theme pins:
+Night -> FORCED_DAY_NIGHT_MODE=2 / night yes, Day -> 1 / no, Sun leaves the
+sun's choice; no process crashed (the android.car.cluster sample crash is
+emulator-only). MotorcycleLogicTest 15/15 earlier on the same code.
+Still to verify on the bike: the backlight actually following Settings
+brightness, and the real sunset flip.
+
