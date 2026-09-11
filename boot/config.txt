@@ -20,7 +20,15 @@ initramfs ramdisk.img followkernel
 disable_overscan=1
 
 # Display panel
-dtoverlay=vc4-kms-dsi-7inch
+# NEO: the official 7" panel is mounted upside down so the display cable
+# leaves the bottom of the case. invx,invy make the kernel invert both touch
+# axes (Android does not rotate touch for an install orientation), and the
+# neo-panel-rot180 overlay (dts/neo-panel-rot180.dts) sets rotation=180 on
+# the panel node so SurfaceFlinger rotates the output. splash.png is
+# pre-rotated. ro.surface_flinger.primary_display_orientation does nothing
+# here: with an AIDL composer SurfaceFlinger only asks the composer.
+dtoverlay=vc4-kms-dsi-7inch,invx,invy
+dtoverlay=neo-panel-rot180
 #dtoverlay=vc4-kms-dsi-ili9881-5inch
 #dtoverlay=vc4-kms-dsi-ili9881-7inch
 #dtoverlay=vc4-kms-dsi-generic

@@ -11,14 +11,17 @@ RPI_BOOT_OUT := $(PRODUCT_OUT)/rpiboot
 RPI_BOOT_FILES := $(wildcard $(DEVICE_PATH)/boot/*)
 RPI_DTB_FILES := $(wildcard $(KERNEL_PATH)/bcm2712*-rpi-*.dtb)
 RPI_OVERLAY_FILES := $(wildcard $(KERNEL_PATH)/overlays/*)
+# NEO: our own overlays (dts sources in $(DEVICE_PATH)/dts/)
+RPI_DEVICE_OVERLAY_FILES := $(wildcard $(DEVICE_PATH)/boot-overlays/*)
 
-$(RPI_BOOT_OUT): $(INSTALLED_RAMDISK_TARGET) $(RPI_BOOT_FILES) $(KERNEL_PATH)/Image $(RPI_DTB_FILES) $(RPI_OVERLAY_FILES)
+$(RPI_BOOT_OUT): $(INSTALLED_RAMDISK_TARGET) $(RPI_BOOT_FILES) $(KERNEL_PATH)/Image $(RPI_DTB_FILES) $(RPI_OVERLAY_FILES) $(RPI_DEVICE_OVERLAY_FILES)
 	mkdir -p $(RPI_BOOT_OUT)
 	mkdir -p $(RPI_BOOT_OUT)/overlays
 	cp $(DEVICE_PATH)/boot/* $(RPI_BOOT_OUT)
 	cp $(KERNEL_PATH)/Image $(RPI_BOOT_OUT)
 	cp $(KERNEL_PATH)/bcm2712*-rpi-*.dtb $(RPI_BOOT_OUT)
 	cp $(KERNEL_PATH)/overlays/* $(RPI_BOOT_OUT)/overlays
+	cp $(DEVICE_PATH)/boot-overlays/* $(RPI_BOOT_OUT)/overlays
 	cp $(PRODUCT_OUT)/ramdisk.img $(RPI_BOOT_OUT)
 	echo $(BOARD_KERNEL_CMDLINE) > $(RPI_BOOT_OUT)/cmdline.txt
 

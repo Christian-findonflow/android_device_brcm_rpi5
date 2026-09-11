@@ -1125,3 +1125,40 @@ levelled it, raw axes and altitude live. Bench numbers and the two HAL fixes
 sensor". Still needs the first ride: forward axis self-learn, lean sign in
 the first corners, ride max lean; then pull /data/vendor/motodash/imu-*.log
 and replay on the host to tune the filter.
+
+## Screen rotated 180 deg (2026-09-11 11:20, display and touch verified)
+
+Christian wants the panel mounted upside down so the display cable leaves
+the bottom of the case. What worked and what did not:
+- `ro.surface_flinger.primary_display_orientation=ORIENTATION_180` does
+  NOTHING on this device: SurfaceFlinger asks the composer first
+  (`getPhysicalDisplayOrientation`, AIDL composers always claim support) and
+  only falls back to the property for HIDL composers. drm_hwcomposer answers
+  from the DRM connector's panel-orientation property.
+- So the rotation comes from the device tree: the official 7" panel is a
+  `simple-panel`, which honours `rotation = <180>` on its node. A first
+  attempt patched a decompiled copy of vc4-kms-dsi-7inch.dtbo - the display
+  rotated but the overlay's parameters (invx/invy) stopped working, because
+  a recompiled decompiled overlay loses its fixups. Final form: stock
+  `dtoverlay=vc4-kms-dsi-7inch,invx,invy` plus our tiny
+  `dtoverlay=neo-panel-rot180` (dts/neo-panel-rot180.dts, target-path
+  /panel_disp@1, built with dtc -@; boot-overlays/ is copied into the boot
+  partition by mkbootimg.mk). Verified: `dumpsys display` installOrientation
+  2, SurfaceFlinger framebufferSpace ROTATION_180, the logical display stays
+  ROTATION_0 so no layout changes; /proc/device-tree/panel_disp@1/rotation =
+  0xb4.
+- Touch: Android does NOT rotate touch for an install orientation (an
+  injected raw touch at panel (292,37) is dispatched as logical (292,37)),
+  it expects the touch controller to report in the rotated frame. The stock
+  7" overlay applies touchscreen-inverted-x/-y by default (fragments 10/11)
+  and its invx/invy parameters REMOVE them, which is a 180 deg flip - i.e.
+  exactly right for the rotated panel. Evdev injection bypasses the driver,
+  so this needs a real finger: tap the app-grid button; if touch were
+  unrotated it would land in the top bar instead.
+  Christian confirmed 11:25: "touch is behaving correctly".
+- Boot splash pre-rotated (boot/splash.png). The rainbow firmware screen and
+  fbcon are already hidden.
+- Bench recipe: `adb root` first (mount needs root; a non-root mount prints
+  "mount: bad /etc/fstab"), `mount -t vfat /dev/block/nvme0n1p1 <dir>`, edit
+  config.txt / overlays/, sync, umount, reboot. /vendor/build.prop stray
+  property removed again.
