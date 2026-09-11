@@ -1228,3 +1228,10 @@ only). The bench launcher is now the /system copy of d33cf642.
   android.hardware.screen.landscape in aosp_rpi5_motorcycle.mk (as the AAOS
   reference car products do) and pushed it to the bench's
   /vendor/etc/permissions; helps the honest, unspoofed path.
+- End to end under the phone profile (12:46): Telegram 12.10.1 downloaded
+  through Aurora, the system package installer asked "Do you want to install
+  this app?", installed for user 10. VLC still fails at Play's delivery step
+  ("AppNotSupported code=2", version code 0 in the details) even spoofed -
+  a per-app Play restriction for the anonymous account; VLC is on F-Droid.
+  APKPure's own site sits behind Cloudflare bot protection (403 to curl);
+  it can be fetched from Firefox on the dash if wanted.
