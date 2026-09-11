@@ -1166,3 +1166,19 @@ is inverted, which is expected.
   "mount: bad /etc/fstab"), `mount -t vfat /dev/block/nvme0n1p1 <dir>`, edit
   config.txt / overlays/, sync, umount, reboot. /vendor/build.prop stray
   property removed again.
+
+## Sideloaded test apps on the bench (2026-09-11 12:00)
+
+For Christian's app-install and compatibility testing, installed for user 10
+with `adb install --user 10` (NOT part of the image; a flash wipes them -
+the APKs are kept in ~/images/apks/ with SHA256SUMS):
+- Firefox 155.0.1 arm64 (org.mozilla.firefox) from
+  archive.mozilla.org/pub/fenix/releases/155.0.1/android/ - onboarding
+  done, renders at 120 dpi in the right panel (tablet layout, small text).
+- F-Droid 1.23.2 (org.fdroid.fdroid) from f-droid.org/F-Droid.apk.
+- Aurora Store 4.8.4 (com.aurora.store) from f-droid.org/repo/ - installs
+  Play Store apps with an anonymous account; no Google services on the
+  image, so anything that needs GMS will not run (microG would be the
+  follow-up if that matters).
+Both stores appear in the app grid automatically (the grid shows every
+launchable app; nothing is allowlisted).
