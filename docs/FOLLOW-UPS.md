@@ -1295,20 +1295,26 @@ Findings:
   holds the bars) only makes DecorView pad windows that themselves asked for
   hidden bars, so it is not the cause. The activity's own base window is
   edge-to-edge at 0..480.
-- Tried: keeping the bars hidden for any activity in the task of the
-  immersive one (DisplaySystemBarsController, task id via
-  ActivityTaskManager.getTasks; note focus passes through the launcher's
-  home window for ~40 ms when an activity starts, so package/focus based
-  rules break). It worked as designed (bars stayed hidden, dialog window
-  frame 480 px) but the dialog was padded exactly the same -> reverted, not
-  committed. Bench restored to stock CarSystemUI.
+- Tried twice (DisplaySystemBarsController, reverted both times, not
+  committed): (1) keep the bars hidden for any activity in the task of the
+  immersive one (task id via ActivityTaskManager.getTasks; a package/focus
+  rule breaks because starting an activity hands the focus to the
+  launcher's home window for ~400 ms); (2) the same plus a 400 ms deferred
+  show so the bars never flash during that hand-over, i.e. the dialog is
+  created with the bars already hidden. Both: bars hidden, dialog window
+  frame 208,0-800,480, and the dialog's root CoordinatorLayout still
+  0,0-592,408 with the content at 57..408 - the app reserves the stable
+  bar insets regardless of visibility and of creation order.
 - Conclusion: the consent dialog needs ~630 px of height including the
   insets it reserves; a 480 px display cannot show it. Nothing at the
   system-bar level helps. Options: (a) tap the 10 px sliver (it is inside
   the dialog window, so it does work), (b) slimmer bars (57+72 = 129 px is
-  27% of the screen; e.g. 40+56 would give apps 384 px - still 16 px short
-  for this dialog), (c) the Touch Display 2 (720 px tall) makes the class
-  of problem go away.
+  27% of the screen). Measured need of this dialog: ~397 px of content
+  (button bottom ~438 px + margin, from 57). Top 48 dp + bottom 64 dp
+  (36 + 48 px, still 28 px icons) would leave 396 px for every app and
+  make this dialog just fit; it is a touch-target trade-off for the rider,
+  so a product decision. (c) The Touch Display 2 (720 px tall) makes the
+  class of problem go away.
 - Slog.d lines from SystemUI's wm package are in the SYSTEM log buffer
   (logcat -b system), not main.
 
