@@ -1287,14 +1287,14 @@ a normal non-immersive activity in the game's task). Its dialog is laid out
 for a phone and its bottom button lands at y=398..440 while the usable area
 ends at 408, so only a 10 px sliver of the button is visible and tappable.
 Findings:
-- With config_remoteInsetsControllerControlsSystemBars the framework marks
-  every app window "force consuming" (InsetsPolicy.setForcedConsumingTypes)
-  and DecorView then pads the content by the bars' STABLE sizes
-  (getInsetsIgnoringVisibility), i.e. 57 px top + 72 px bottom whether or
-  not the bars are currently shown. Only a window that itself asks for
-  hidden bars (the game's main screen) skips the padding. Verified with
-  dumpsys activity top: the launcher home's content frame is 0,57-592,408
-  while the bars are hidden.
+- The dialog reserves the bars' sizes itself: its root is a plain
+  CoordinatorLayout (no DecorView), and with the bars hidden and its window
+  frame at the full 480 px it still laid out at 57..408, i.e. it uses the
+  stable insets (getInsetsIgnoringVisibility). The framework's forced
+  consuming (InsetsPolicy.setForcedConsumingTypes when the remote controller
+  holds the bars) only makes DecorView pad windows that themselves asked for
+  hidden bars, so it is not the cause. The activity's own base window is
+  edge-to-edge at 0..480.
 - Tried: keeping the bars hidden for any activity in the task of the
   immersive one (DisplaySystemBarsController, task id via
   ActivityTaskManager.getTasks; note focus passes through the launcher's
