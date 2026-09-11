@@ -52,6 +52,12 @@ PRODUCT_PACKAGES += \
 PRODUCT_COPY_FILES += \
     $(DEVICE_PATH)/car/car_audio_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/car_audio_configuration.xml
 
+# Declare the landscape screen like the AAOS reference products do
+# (device/generic/car/common/car.mk). Without it the Play catalogue (via
+# Aurora) marks every app with a screen-orientation requirement incompatible.
+PRODUCT_COPY_FILES += \
+    frameworks/native/data/etc/android.hardware.screen.landscape.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.screen.landscape.xml
+
 # Bluetooth - phone (HFP client, A2DP sink, AVRCP), earbuds (A2DP source, HFP AG).
 # Call audio: the phone's SCO link is routed over HCI (software datapath) and
 # bridged in the stack to the earbuds' SCO link (bluetooth.neo.sco_bridge,

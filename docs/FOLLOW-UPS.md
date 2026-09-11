@@ -1221,3 +1221,10 @@ only). The bench launcher is now the /system copy of d33cf642.
   patch; parked.
 - Good compatibility probes without DRM/GMS: NewPipe, VLC, Telegram, Signal,
   AntennaPod (already in), Firefox (done).
+- 12:40 "everything says not supported": Aurora was still on the real
+  device profile. Aurora > account menu (top right) > Spoof manager >
+  Device > Galaxy S25 Ultra (arm64, API 35) > Restart > log in Anonymous
+  again. After that VLC shows Install (was "not supported"). Also declared
+  android.hardware.screen.landscape in aosp_rpi5_motorcycle.mk (as the AAOS
+  reference car products do) and pushed it to the bench's
+  /vendor/etc/permissions; helps the honest, unspoofed path.
