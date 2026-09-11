@@ -14,5 +14,10 @@
 <permissions>
     <privapp-permissions package="com.android.car.carlauncher">
         <permission name="android.car.permission.CAR_MILEAGE"/>
+        <!-- Settings.Global writes (CarSettings FORCED_DAY_NIGHT_MODE, set from the
+             sun by NightBrightnessController). Signature|privileged: without this
+             line ro.control_privapp_permissions=enforce makes system_server refuse
+             to boot ("not in privileged permission allowlist"). -->
+        <permission name="android.permission.WRITE_SECURE_SETTINGS"/>
     </privapp-permissions>
 </permissions>
