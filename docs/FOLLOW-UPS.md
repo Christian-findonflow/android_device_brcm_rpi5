@@ -1182,3 +1182,24 @@ the APKs are kept in ~/images/apks/ with SHA256SUMS):
   follow-up if that matters).
 Both stores appear in the app grid automatically (the grid shows every
 launchable app; nothing is allowlisted).
+
+## "Manage unknown app sources is not supported" (2026-09-11 12:20, fixed)
+
+Christian, granting Aurora its install permission: the dialog comes from
+AAOS's CarFrameworkPackageStubs (in the Car services fork), which claims
+android.settings.MANAGE_UNKNOWN_APP_SOURCES at priority 101 and only says
+"not supported"; car Settings has no real screen (its
+SettingsDefaultIntentActivity at priority 1 just toasts). Bench unblock:
+`appops set --user 10 <pkg> REQUEST_INSTALL_PACKAGES allow` for
+com.aurora.store and org.fdroid.fdroid. Proper fix (launcher fork
+d33cf642): InstallUnknownAppsActivity answers the intent at priority 102 -
+per-app allow switch backed by AppOpsManager.setMode (MANAGE_APP_OPS_MODES
+is signature-level; the launcher is platform-signed) - and is injected into
+Settings as a tile below Service log. Verified on the bench: the intent
+resolves to it, the switch flips the op allow/deny/allow, it lands in the
+right panel (displayAreaFeatureId 1). Gotcha: an adb-installed update of
+the launcher gets its new filter's priority clamped to 0 (system copy has
+no such activity), so the stub kept winning until the apk was pushed into
+/system/priv-app/CarLauncher and the data update removed with
+`pm uninstall com.android.car.carlauncher` (no --user: removes the update
+only). The bench launcher is now the /system copy of d33cf642.
