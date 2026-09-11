@@ -1203,3 +1203,21 @@ no such activity), so the stub kept winning until the apk was pushed into
 /system/priv-app/CarLauncher and the data update removed with
 `pm uninstall com.android.car.carlauncher` (no --user: removes the update
 only). The bench launcher is now the /system copy of d33cf642.
+
+## App compatibility findings (2026-09-11 12:35)
+
+- Aurora "app not supported" (Netflix): Play's compatibility verdict for a
+  device that declares android.hardware.type.automotive - apps not published
+  for cars are "incompatible". Aurora > Settings > Spoofing > pick a phone
+  device profile gets the phone catalogue (same arm64 APKs).
+- Netflix itself cannot work here regardless: it needs Widevine and the
+  image has only ClearKey (/vendor/lib64/mediadrm/libdrmclearkeyplugin.so;
+  vendor/brcm/rpi5/proprietary has no Widevine, the hal_drm_widevine.te is a
+  leftover). Same for Disney/Prime/Spotify-video etc. Widevine L3 exists for
+  the Pi only as blobs lifted from ChromeOS in some LineageOS builds - a
+  licensing-grey follow-up, and not a riding use case.
+- No Google services: apps that hard-require GMS (Maps SDK, FCM push,
+  Google sign-in) will fail. microG would need the platform signature-spoof
+  patch; parked.
+- Good compatibility probes without DRM/GMS: NewPipe, VLC, Telegram, Signal,
+  AntennaPod (already in), Firefox (done).
