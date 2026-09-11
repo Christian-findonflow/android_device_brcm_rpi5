@@ -1281,3 +1281,34 @@ overlay/AndroidCarRpiOverlay (car+motorcycle only):
 Normal apps are unaffected (they request the bars visible). The portrait
 letterbox itself is the game's own orientation choice, not a bug.
 
+Follow-up the same afternoon - phone-height dialogs inside a game: Candy
+Crush's Play button opens the King consent screen (OneTrustLaunchActivity,
+a normal non-immersive activity in the game's task). Its dialog is laid out
+for a phone and its bottom button lands at y=398..440 while the usable area
+ends at 408, so only a 10 px sliver of the button is visible and tappable.
+Findings:
+- With config_remoteInsetsControllerControlsSystemBars the framework marks
+  every app window "force consuming" (InsetsPolicy.setForcedConsumingTypes)
+  and DecorView then pads the content by the bars' STABLE sizes
+  (getInsetsIgnoringVisibility), i.e. 57 px top + 72 px bottom whether or
+  not the bars are currently shown. Only a window that itself asks for
+  hidden bars (the game's main screen) skips the padding. Verified with
+  dumpsys activity top: the launcher home's content frame is 0,57-592,408
+  while the bars are hidden.
+- Tried: keeping the bars hidden for any activity in the task of the
+  immersive one (DisplaySystemBarsController, task id via
+  ActivityTaskManager.getTasks; note focus passes through the launcher's
+  home window for ~40 ms when an activity starts, so package/focus based
+  rules break). It worked as designed (bars stayed hidden, dialog window
+  frame 480 px) but the dialog was padded exactly the same -> reverted, not
+  committed. Bench restored to stock CarSystemUI.
+- Conclusion: the consent dialog needs ~630 px of height including the
+  insets it reserves; a 480 px display cannot show it. Nothing at the
+  system-bar level helps. Options: (a) tap the 10 px sliver (it is inside
+  the dialog window, so it does work), (b) slimmer bars (57+72 = 129 px is
+  27% of the screen; e.g. 40+56 would give apps 384 px - still 16 px short
+  for this dialog), (c) the Touch Display 2 (720 px tall) makes the class
+  of problem go away.
+- Slog.d lines from SystemUI's wm package are in the SYSTEM log buffer
+  (logcat -b system), not main.
+
