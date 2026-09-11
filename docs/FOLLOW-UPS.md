@@ -1156,6 +1156,10 @@ the bottom of the case. What worked and what did not:
   so this needs a real finger: tap the app-grid button; if touch were
   unrotated it would land in the top bar instead.
   Christian confirmed 11:25: "touch is behaving correctly".
+Image v23 (~/images/...-20260911-...-v23.img.gz, sha 7eeca1cf) boots rotated
+from the flash: the overlay and the config lines are in its boot partition.
+The panel must now be mounted upside down; on an upright bench the picture
+is inverted, which is expected.
 - Boot splash pre-rotated (boot/splash.png). The rainbow firmware screen and
   fbcon are already hidden.
 - Bench recipe: `adb root` first (mount needs root; a non-root mount prints
