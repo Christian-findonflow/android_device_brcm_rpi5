@@ -11,4 +11,14 @@
          With the phone's calls arriving over the Bluetooth hands-free client
          the dash is voice capable, as AAOS reference devices are. -->
     <bool name="config_voice_capable">true</bool>
+    <!-- Let the car SystemUI control the system bars, so an app's immersive
+         request (games) hides them as config_systemBarPersistency=1 intends.
+         With the framework default (false) the bars never hide and a
+         full-screen game draws its top and bottom under the fixed bars. -->
+    <bool name="config_remoteInsetsControllerControlsSystemBars">true</bool>
+    <!-- And let a swipe from the top or bottom edge bring the hidden bars back
+         transiently; without this DisplayPolicy.requestTransientBars ignores
+         every edge swipe ("Remote insets controller disallows showing system
+         bars") and an immersive game has no way out (no hardware keys). -->
+    <bool name="config_remoteInsetsControllerSystemBarsCanBeShownByUserAction">true</bool>
 </resources>

@@ -1235,3 +1235,49 @@ only). The bench launcher is now the /system copy of d33cf642.
   a per-app Play restriction for the anonymous account; VLC is on F-Droid.
   APKPure's own site sits behind Cloudflare bot protection (403 to curl);
   it can be fetched from Firefox on the dash if wanted.
+
+## Raspberry Pi Touch Display 2 assessment (asked 2026-09-11 13:00)
+
+Same 7" (155x88 mm active vs 155x86), 1280x720, ILI9881C panel + Goodix
+GT911 touch, natively PORTRAIT (720x1280). Everything needed is already in
+the tree: config.txt has the `vc4-kms-dsi-ili9881-7inch` overlay commented
+out, the kernel carries the panel driver ("raspberrypi,dsi-7inch") and the
+Goodix driver, and that overlay has first-class `rotation=` plus
+invx/invy/swapxy parameters, so our 180 deg mount becomes one parameter
+instead of the neo-panel-rot180 overlay. Split boundary scales by itself
+(leftWidth = width*208/800). Points to handle on the bench (half a day):
+- Density: today 120 dpi is auto-derived from the panel's 131.9 ppi; the
+  Display 2 reports ~210 ppi and would land on 213/240 -> 961x541 dp, i.e.
+  less room than the 1067x640 dp we lay out for. Force
+  ro.sf.lcd_density=180 -> 1138x640 dp: same height as now, 7% more width,
+  every existing layout carries over; text physically the same size, and
+  square pixels at last (the old 7" is 8% stretched horizontally).
+- config.txt: overlay line + rotation/touch params, drop the
+  video=DSI-x:800x480M@60 cmdline lines (BoardConfig.mk), 1280x720 splash.
+- Verify which `rotation=` value is "upside-down landscape" for a portrait
+  panel (270 or 90) and the touch invx/invy/swapxy combination, same method
+  as today (installOrientation + a raw touch + a finger).
+- Mechanics/power: check the FPC exit position on the drawing and the
+  higher backlight draw; no software concern.
+
+## Immersive apps (games) and the system bars - fixed 2026-09-11
+
+Symptom: Candy Crush (SENSOR_PORTRAIT, requests hidden status/navigation
+bars) was letterboxed 389x480 in the right pane but drawn under the fixed
+top and bottom car bars, so its top and bottom were cut off.
+Cause: CarSystemUI's config_systemBarPersistency=1 ("immersive") only acts
+when the framework hands system-bar control to the remote insets controller,
+and the framework default is off. Two framework bools, now set in
+overlay/AndroidCarRpiOverlay (car+motorcycle only):
+- config_remoteInsetsControllerControlsSystemBars=true: SystemUI hides both
+  bars when the focused app asks for immersive; the game gets 0..480.
+- config_remoteInsetsControllerSystemBarsCanBeShownByUserAction=true:
+  without it DisplayPolicy.requestTransientBars ignores every edge swipe
+  ("Remote insets controller disallows showing system bars") and there is
+  no way out of an immersive app (no hardware keys). With it a swipe from
+  the top or bottom edge shows both bars for a few seconds (verified with
+  input swipe + timed screenshots: shown at 0 s and 1.5 s, hidden again by
+  6 s, both edges).
+Normal apps are unaffected (they request the bars visible). The portrait
+letterbox itself is the game's own orientation choice, not a bug.
+
