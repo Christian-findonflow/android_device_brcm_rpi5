@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <ctime>
 #include <thread>
 #include <fstream>
 #include <sstream>
@@ -531,6 +532,24 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addFloatVendorProp(VENDOR_RIDE_WH_PER_KM, -1000.0f, 1000.0f, 0.0f);
     addFloatVendorProp(VENDOR_RIDE_MAX_SPEED_MPS, 0.0f, 100.0f, 0.0f);
     addIntVendorProp(VENDOR_RIDE_SEQ, 0);
+    addFloatVendorProp(VENDOR_RIDE_ENERGY_WH, -100000.0f, 100000.0f, 0.0f);
+    {
+        // Ride history as a string; ON_CHANGE, republished after every ride.
+        VehiclePropConfig config;
+        config.prop = VENDOR_RIDE_LOG;
+        config.access = VehiclePropertyAccess::READ;
+        config.changeMode = VehiclePropertyChangeMode::ON_CHANGE;
+        VehicleAreaConfig areaConfig;
+        areaConfig.areaId = 0;
+        config.areaConfigs.push_back(areaConfig);
+        mPropertyConfigs.push_back(config);
+        VehiclePropValue value;
+        value.prop = VENDOR_RIDE_LOG;
+        value.areaId = 0;
+        value.timestamp = elapsedRealtimeNano();
+        value.value.stringValue = "";
+        mCurrentValues[VENDOR_RIDE_LOG] = value;
+    }
     addFloatVendorProp(VENDOR_RIDE_MAX_LEAN_L, 0.0f, 90.0f, 0.0f);
     addFloatVendorProp(VENDOR_RIDE_MAX_LEAN_R, 0.0f, 90.0f, 0.0f);
 
@@ -1733,6 +1752,7 @@ void MotorcycleVehicleHardware::trackRide(float speedMps, int64_t timestamp) {
         mRideStartNs = timestamp;
         mRideMovingNs = 0;
         mRideEnergyWh = 0.0;
+        mRideStartSoc = mLastSocPercent;
         mRideMaxSpeedMps = 0.0f;
         mRideMaxLeanL = mRideMaxLeanR = 0.0f;
         mRideLastTrackNs = timestamp;
@@ -1755,7 +1775,7 @@ void MotorcycleVehicleHardware::addRideEnergy(double wh) {
 }
 
 void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
-    float meters, seconds, whPerKm, maxMps, maxLeanL, maxLeanR;
+    float meters, seconds, wh, whPerKm, maxMps, maxLeanL, maxLeanR, socStart, socEnd;
     int32_t seq;
     {
         std::lock_guard<std::mutex> lock(mRideMutex);
@@ -1770,16 +1790,31 @@ void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
         }
         meters = static_cast<float>(distance);
         seconds = static_cast<float>(mRideMovingNs / 1e9);
+        wh = static_cast<float>(mRideEnergyWh);
         whPerKm = static_cast<float>(mRideEnergyWh / (distance / 1000.0));
         maxMps = mRideMaxSpeedMps;
         maxLeanL = mRideMaxLeanL;
         maxLeanR = mRideMaxLeanR;
+        socStart = mRideStartSoc;
+        socEnd = mLastSocPercent;
         seq = ++mRideSeq;
     }
     LOG(INFO) << "Ride #" << seq << " ended (" << (linkDead ? "key off" : "parked") << "): "
               << meters << " m, " << seconds << " s moving, " << whPerKm << " Wh/km, max "
               << maxMps << " m/s, lean " << maxLeanL << "L/" << maxLeanR << "R";
-    publishRideSummary(meters, seconds, whPerKm, maxMps, maxLeanL, maxLeanR, seq, nowNs);
+    publishRideSummary(meters, seconds, wh, whPerKm, maxMps, maxLeanL, maxLeanR, seq, nowNs);
+    // One line per ride in rides.csv (the history the launcher shows). Wall
+    // time comes from the clock at ride end; 0 when it has not been set yet
+    // (no RTC on the Pi - GPS/NTP set it during the ride).
+    int64_t epoch = static_cast<int64_t>(time(nullptr));
+    if (epoch < 1600000000LL) epoch = 0;
+    char line[256];
+    snprintf(line, sizeof(line), "%d,%lld,%.0f,%.0f,%.1f,%.1f,%.2f,%.1f,%.1f,%.1f,%.1f",
+             seq, static_cast<long long>(epoch), meters, seconds, wh, whPerKm, maxMps,
+             maxLeanL, maxLeanR, socStart, socEnd);
+    appendRideLog(line);
+    publishRideLog(nowNs);
+    persistConfig("persist.vendor.motodash.ride.wh", std::to_string(wh));
     persistConfig("persist.vendor.motodash.ride.maxleanl", std::to_string(maxLeanL));
     persistConfig("persist.vendor.motodash.ride.maxleanr", std::to_string(maxLeanR));
     persistConfig("persist.vendor.motodash.ride.meters", std::to_string(meters));
@@ -1789,9 +1824,10 @@ void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
     persistConfig("persist.vendor.motodash.ride.seq", std::to_string(seq));
 }
 
-void MotorcycleVehicleHardware::publishRideSummary(float meters, float seconds, float whPerKm,
-                                                   float maxMps, float maxLeanL, float maxLeanR,
-                                                   int32_t seq, int64_t timestamp) {
+void MotorcycleVehicleHardware::publishRideSummary(float meters, float seconds, float wh,
+                                                   float whPerKm, float maxMps, float maxLeanL,
+                                                   float maxLeanR, int32_t seq,
+                                                   int64_t timestamp) {
     std::lock_guard<std::mutex> lock(mValuesMutex);
     auto setF = [&](int32_t prop, float v) {
         auto& value = mCurrentValues[prop];
@@ -1801,6 +1837,7 @@ void MotorcycleVehicleHardware::publishRideSummary(float meters, float seconds, 
     };
     setF(VENDOR_RIDE_DISTANCE_M, meters);
     setF(VENDOR_RIDE_DURATION_S, seconds);
+    setF(VENDOR_RIDE_ENERGY_WH, wh);
     setF(VENDOR_RIDE_WH_PER_KM, whPerKm);
     setF(VENDOR_RIDE_MAX_SPEED_MPS, maxMps);
     setF(VENDOR_RIDE_MAX_LEAN_L, maxLeanL);
@@ -1809,6 +1846,61 @@ void MotorcycleVehicleHardware::publishRideSummary(float meters, float seconds, 
     s.value.int32Values[0] = seq;
     s.timestamp = timestamp;
     notifyPropertyChange(VENDOR_RIDE_SEQ, s);   // last, so listeners see complete values
+}
+
+static const char* kRideLogHeader =
+        "seq,end_epoch,meters,moving_s,wh,wh_per_km,max_mps,max_lean_l,max_lean_r,soc_start,soc_end";
+
+void MotorcycleVehicleHardware::appendRideLog(const std::string& line) {
+    std::string path = mCaptureDir + "/rides.csv";
+    bool fresh = access(path.c_str(), F_OK) != 0;
+    std::ofstream out(path, std::ios::app);
+    if (!out) {
+        LOG(ERROR) << "Ride log: cannot open " << path << ": " << strerror(errno);
+        return;
+    }
+    if (fresh) out << kRideLogHeader << "\n";
+    out << line << "\n";
+    out.close();
+    std::lock_guard<std::mutex> lock(mRideMutex);
+    mRideLogLines.push_back(line);
+}
+
+void MotorcycleVehicleHardware::loadRideLog() {
+    std::string path = mCaptureDir + "/rides.csv";
+    std::ifstream in(path);
+    if (!in) return;
+    std::vector<std::string> lines;
+    std::string l;
+    while (std::getline(in, l)) {
+        if (l.empty() || l[0] == 's') continue;  // header
+        lines.push_back(l);
+    }
+    {
+        std::lock_guard<std::mutex> lock(mRideMutex);
+        mRideLogLines = std::move(lines);
+    }
+    LOG(INFO) << "Ride log: " << mRideLogLines.size() << " rides in " << path;
+    publishRideLog(elapsedRealtimeNano());
+}
+
+void MotorcycleVehicleHardware::publishRideLog(int64_t timestamp) {
+    std::string text;
+    {
+        std::lock_guard<std::mutex> lock(mRideMutex);
+        size_t n = mRideLogLines.size();
+        size_t from = n > static_cast<size_t>(kRideLogPublishedLines)
+                ? n - kRideLogPublishedLines : 0;
+        for (size_t i = from; i < n; i++) {
+            text += mRideLogLines[i];
+            text += '\n';
+        }
+    }
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto& value = mCurrentValues[VENDOR_RIDE_LOG];
+    value.value.stringValue = text;
+    value.timestamp = timestamp;
+    notifyPropertyChange(VENDOR_RIDE_LOG, value);
 }
 
 void MotorcycleVehicleHardware::accumulateDistance(float speedMps, int64_t timestamp) {
@@ -2425,17 +2517,19 @@ void MotorcycleVehicleHardware::loadConfig() {
         property_get("persist.vendor.motodash.ride.seconds", s, "0");
         property_get("persist.vendor.motodash.ride.whperkm", w, "0");
         property_get("persist.vendor.motodash.ride.maxmps", x, "0");
-        char ll[PROPERTY_VALUE_MAX], lr[PROPERTY_VALUE_MAX];
+        char ll[PROPERTY_VALUE_MAX], lr[PROPERTY_VALUE_MAX], e[PROPERTY_VALUE_MAX];
         property_get("persist.vendor.motodash.ride.maxleanl", ll, "0");
         property_get("persist.vendor.motodash.ride.maxleanr", lr, "0");
+        property_get("persist.vendor.motodash.ride.wh", e, "0");
         {
             std::lock_guard<std::mutex> lock(mRideMutex);
             mRideSeq = seq;
         }
-        publishRideSummary(atof(m), atof(s), atof(w), atof(x), atof(ll), atof(lr), seq,
+        publishRideSummary(atof(m), atof(s), atof(e), atof(w), atof(x), atof(ll), atof(lr), seq,
                            elapsedRealtimeNano());
         LOG(INFO) << "Restored last ride summary #" << seq;
     }
+    loadRideLog();
     if (property_get("persist.vendor.motodash.whperkm", propValue, "") > 0) {
         float v = strtof(propValue, nullptr);
         if (v >= kMinUsableWhPerKm && v <= kMaxChunkWhPerKm) {

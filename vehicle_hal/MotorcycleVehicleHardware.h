@@ -155,6 +155,12 @@ constexpr int32_t VENDOR_RIDE_DURATION_S = 0x21600051;    // float, seconds movi
 constexpr int32_t VENDOR_RIDE_WH_PER_KM = 0x21600052;     // float, net incl. regen
 constexpr int32_t VENDOR_RIDE_MAX_SPEED_MPS = 0x21600053; // float
 constexpr int32_t VENDOR_RIDE_SEQ = 0x21400049;           // int, increments per summary
+constexpr int32_t VENDOR_RIDE_ENERGY_WH = 0x21600054;     // float, net Wh drawn incl. regen
+// Ride history: the last kRideLogPublishedLines of <capture dir>/rides.csv as one
+// string ("seq,end_epoch,meters,moving_s,wh,wh_per_km,max_mps,max_lean_l,max_lean_r,
+// soc_start,soc_end" per line, newest last). Republished after every ride.
+constexpr int32_t VENDOR_RIDE_LOG = 0x21100055;           // string
+constexpr int kRideLogPublishedLines = 60;
 // Inertial sensing: ISM330DHCX + BMP280 on /dev/i2c-1 (Grove port of the CAN
 // HAT), or the scenario file /data/vendor/motodash/imu_sim on the simulator.
 // Lean is estimated with the vehicle-aware filter in imu/LeanEstimator.h;
@@ -334,7 +340,10 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void trackRide(float speedMps, int64_t timestamp);
     void addRideEnergy(double wh);
     void endRideIfDue(int64_t nowNs, bool linkDead);
-    void publishRideSummary(float meters, float seconds, float whPerKm, float maxMps,
+    void appendRideLog(const std::string& line);   // rides.csv in mCaptureDir
+    void loadRideLog();                            // at startup: file -> VENDOR_RIDE_LOG
+    void publishRideLog(int64_t timestamp);        // last lines of the file
+    void publishRideSummary(float meters, float seconds, float wh, float whPerKm, float maxMps,
                             float maxLeanL, float maxLeanR, int32_t seq, int64_t timestamp);
     // Called by the watchdog (and tests, with an explicit now) to drop link
     // bits when frames stop arriving.
@@ -508,6 +517,8 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     int64_t mRideMovingNs = 0;
     int64_t mRideLastTrackNs = 0;
     double mRideEnergyWh = 0.0;
+    float mRideStartSoc = -1.0f;   // pack % when the ride started (-1 = unknown)
+    std::vector<std::string> mRideLogLines;  // data lines of rides.csv (no header)
     float mRideMaxSpeedMps = 0.0f;
     float mRideMaxLeanL = 0.0f;  // deg, this ride, speed-gated (imu thread)
     float mRideMaxLeanR = 0.0f;

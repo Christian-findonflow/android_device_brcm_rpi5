@@ -9,6 +9,8 @@
  */
 
 #include "MotorcycleVehicleHardware.h"
+#include <cstdlib>
+#include <algorithm>
 #include "imu/SyntheticImu.h"
 
 #include <gtest/gtest.h>
@@ -960,6 +962,52 @@ TEST_F(MotorcycleVehicleHardwareTest, RideSummaryPublishedAtKeyOff) {
     EXPECT_EQ(lastEvent(VENDOR_RIDE_SEQ)->value.int32Values[0], 1);
 }
 
+TEST_F(MotorcycleVehicleHardwareTest, RideSummaryHasEnergyAndAppendsRideLog) {
+    // Same ride as above (1500 m, 90 Wh) twice; rides.csv in a temp dir.
+    char dirTemplate[] = "/tmp/motodash_rides_XXXXXX";
+    ASSERT_NE(mkdtemp(dirTemplate), nullptr);
+    std::string dir = dirTemplate;
+    mPeer->setCaptureDir(dir);
+
+    auto ride = [&](int64_t& t) {
+        for (int i = 0; i < 2000; i++) {
+            t += 50000000LL;
+            mPeer->accumulateDistance(15.0f, t);
+            mPeer->accumulateEnergy(72.0f, 45.0f, 15.0f, t);
+        }
+        mPeer->endRideIfDue(t + 2000000000LL, /*linkDead=*/true);
+        t += 10000000000LL;
+    };
+    int64_t t = 1000000000LL;
+    ride(t);
+    ASSERT_TRUE(lastEvent(VENDOR_RIDE_ENERGY_WH).has_value());
+    EXPECT_NEAR(lastEvent(VENDOR_RIDE_ENERGY_WH)->value.floatValues[0], 90.0f, 3.0f);
+
+    std::ifstream in(dir + "/rides.csv");
+    ASSERT_TRUE(in.good());
+    std::string header, line1, extra;
+    std::getline(in, header);
+    std::getline(in, line1);
+    EXPECT_EQ(header.rfind("seq,end_epoch,meters,moving_s,wh,wh_per_km", 0), 0u);
+    EXPECT_EQ(line1.rfind("1,", 0), 0u);           // seq 1
+    EXPECT_FALSE(std::getline(in, extra));         // exactly one ride so far
+
+    auto log1 = lastEvent(VENDOR_RIDE_LOG);
+    ASSERT_TRUE(log1.has_value());
+    EXPECT_EQ(log1->value.stringValue, line1 + "\n");
+
+    ride(t);
+    auto log2 = lastEvent(VENDOR_RIDE_LOG);
+    ASSERT_TRUE(log2.has_value());
+    EXPECT_EQ(std::count(log2->value.stringValue.begin(), log2->value.stringValue.end(), '\n'), 2);
+    EXPECT_NE(log2->value.stringValue.find("\n2,"), std::string::npos);
+
+    // Energy travels with the summary and survives a restart via the log file.
+    EXPECT_NEAR(lastEvent(VENDOR_RIDE_ENERGY_WH)->value.floatValues[0], 90.0f, 3.0f);
+    unlink((dir + "/rides.csv").c_str());
+    rmdir(dir.c_str());
+}
+
 TEST_F(MotorcycleVehicleHardwareTest, ShortShuffleIsNotARide) {
     // 20 s at 5 m/s = 100 m (moving the bike in the garage): no summary.
     int64_t t = 1000000000LL;
@@ -1358,6 +1406,7 @@ TEST_F(MotorcycleVehicleHardwareTest, PropertyIdTypeMatchesStoredValue) {
     constexpr int32_t kTypeMask = 0x00FF0000;
     constexpr int32_t kInt32 = 0x00400000, kInt64 = 0x00500000, kFloat = 0x00600000;
     constexpr int32_t kInt32Vec = 0x00410000, kFloatVec = 0x00610000, kBool = 0x00200000;
+    constexpr int32_t kString = 0x00100000;
     for (const auto& cfg : mPeer->propertyConfigs()) {
         const auto& v = mPeer->currentValue(cfg.prop);
         int32_t type = cfg.prop & kTypeMask;
@@ -1373,6 +1422,9 @@ TEST_F(MotorcycleVehicleHardwareTest, PropertyIdTypeMatchesStoredValue) {
             EXPECT_GE(v.value.int32Values.size(), 1u) << id;
         } else if (type == kInt64) {
             EXPECT_EQ(v.value.int64Values.size(), 1u) << id << " is INT64 but the HAL fills int32";
+        } else if (type == kString) {
+            // Text lives in stringValue (may be empty, e.g. no rides yet); no numerics.
+            EXPECT_TRUE(v.value.floatValues.empty() && v.value.int32Values.empty()) << id;
         } else {
             ADD_FAILURE() << id << " has an unexpected value type nibble";
         }

@@ -143,6 +143,10 @@ RS=$(prop 557842505)
 check "ride summary published at key-off (seq ${RS:-none})" "$([ "${RS:-0}" -ge 1 ] 2>/dev/null && echo 1 || echo 0)" "VENDOR_RIDE_SEQ"
 RM=$(prop 559939664)
 check "ride distance ~1.77km (got ${RM:-0}m)" "$(near ${RM:-0} 1770 60)" "VENDOR_RIDE_DISTANCE_M"
+RW=$(prop 559939668)
+check "ride energy positive (got ${RW:-none} Wh)" "$(awk -v w="${RW:-0}" 'BEGIN{print (w>1)?1:0}')" "VENDOR_RIDE_ENERGY_WH"
+RL=$($A shell "cat /data/vendor/motodash/rides.csv 2>/dev/null" | tr -d '\r' | grep -c "^${RS:-0},")
+check "rides.csv has this ride (seq ${RS:-0})" "$([ "${RL:-0}" -ge 1 ] && echo 1 || echo 0)" "ride history line"
 check "speed 0 (got $V)" "$(near ${V:-1} 0 0.01)" "last frame was standstill"
 ML=$(prop $PROP_MAXLEAN_L); MR=$(prop $PROP_MAXLEAN_R)
 check "ride max lean R ~30 (got ${MR:-none})" "$(near ${MR:-0} 30 2.5)" "VENDOR_RIDE_MAX_LEAN_R with the summary"

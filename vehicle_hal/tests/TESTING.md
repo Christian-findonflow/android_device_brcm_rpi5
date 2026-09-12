@@ -352,3 +352,28 @@ link state and frame rate, decoded values, raw indicator levels, HAL log);
 `can_timeline.py <capture> [epoch]` prints every byte change per ID from a
 capture so a rider sequence maps onto bytes; `moto_can_replay` pushed to
 /data/local/tmp on the bike sends probe frames (`... can1 7E3#0322F00F00000000`).
+
+## Ride history (2026-09-12)
+
+Every ride summary (key-off or 5 min parked, >= 200 m) is now also appended
+as one CSV line to `/data/vendor/motodash/rides.csv` by the HAL:
+
+    seq,end_epoch,meters,moving_s,wh,wh_per_km,max_mps,max_lean_l,max_lean_r,soc_start,soc_end
+
+`wh` is the net energy drawn over the ride including regen (also published
+as VENDOR_RIDE_ENERGY_WH 0x21600054 with the summary and persisted with the
+other last-ride props); `end_epoch` is 0 when the clock had not been set
+(no RTC - GPS/NTP set it during the ride). The last 60 lines are published
+as the STRING property VENDOR_RIDE_LOG 0x21100055 (loaded at startup,
+republished after each ride); the launcher's RidesActivity (cockpit LAST
+RIDE line, Rider settings > Ride history) parses it with RideLog.java.
+
+Tests: gtest `RideSummaryHasEnergyAndAppendsRideLog` (two rides into a temp
+capture dir: 90 Wh each, CSV header + lines, log property grows);
+`PropertyIdTypeMatchesStoredValue` knows the STRING nibble; e2e checks
+"ride energy positive" and "rides.csv has this ride"; launcher
+`MotorcycleLogicTest#rideLog_parseTotalsAndFormats`. On the emulator, two
+`moto_can_replay` runs 15 s apart give two history rows (the bus going
+silent ends each ride). Inspect on a device: `adb shell cat
+/data/vendor/motodash/rides.csv` (root).
+

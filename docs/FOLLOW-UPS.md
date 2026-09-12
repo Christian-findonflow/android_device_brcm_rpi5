@@ -1404,3 +1404,40 @@ emulator-only). MotorcycleLogicTest 15/15 earlier on the same code.
 Still to verify on the bike: the backlight actually following Settings
 brightness, and the real sunset flip.
 
+## Ride history and energy per ride (2026-09-12)
+
+Asked for as items 1 and 2 of the "rides" questions (3 = barometric climb
+per ride, 4 = elevation in the range model, parked as nice-to-haves; the
+baro caveat is airflow at speed - check the first ride capture's pressure
+against speed before trusting altitude deltas).
+- HAL: VENDOR_RIDE_ENERGY_WH with the summary; rides.csv in the capture dir
+  (source of truth, append-only, ~80 B per ride); VENDOR_RIDE_LOG string
+  with the last 60 lines. Details in vehicle_hal/tests/TESTING.md.
+- Launcher: LAST RIDE line shows "· NNN Wh" and opens RidesActivity on tap;
+  Rider settings > Ride history; RidesActivity lists newest first with
+  totals (rides, distance, moving time, kWh) in the day/night palette.
+- Not done: export (GPX/CSV share), per-ride climb, delete/reset history
+  (delete rides.csv as root for now).
+
+- Verified on the cuttlefish full image: two replayed rides -> two rows
+  (12 Sep 08:42 / 08:45, 1.1 mi, 2 min, 104 Wh, 59 Wh/km, max 35 mph, lean
+  22R), totals line; host gtests 70/70, e2e 40/40; RideLog checked on the
+  host JVM (the CarLauncherTests instrumentation APK no longer installs on
+  the emulator: its manifest carries the app's providers and clashes with
+  the system launcher - harness follow-up). soc_start/soc_end are -1 on the
+  emulator's plain replay because only the BMS PID path sets the SoC used
+  by the range model; the bike's BMS answers PIDs, so they fill in there.
+- Christian's review of the run (2026-09-12): (a) a fault "distorted both
+  panes" - the banners were inserted into the layouts, pushing the card
+  grid down until the Range card overlapped itself and jumping the cluster's
+  gear badge; now the cockpit banner overlays the header row (FrameLayout)
+  and the cluster banner takes the lean arc's fixed slot, so nothing moves.
+  (b) "more information on the nature of the error": MotorcycleFaults gained
+  a plain-language meaning + what-to-do per fault (details()), the cockpit
+  banner says TAP FOR DETAILS and opens a dialog listing them, critical
+  first. (c) Rides "Close" went to the wrong screen: RidesActivity had the
+  settings task affinity + singleTask, so it lived in another task; now it
+  stacks on its caller (cockpit or Rider settings).
+- Fixed dark look remains on Battery Details / Rider / Dash settings /
+  Maintenance in day mode (deliberate for now, they are not riding
+  surfaces).
