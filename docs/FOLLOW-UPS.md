@@ -1441,3 +1441,26 @@ against speed before trusting altitude deltas).
 - Fixed dark look remains on Battery Details / Rider / Dash settings /
   Maintenance in day mode (deliberate for now, they are not riding
   surfaces).
+
+## Bench push of v28 content without a reflash (2026-09-12 morning)
+
+Pushed onto the v25 bench: privapp-permissions-neo.xml (first - the
+launcher needs it or system_server dies), CarLauncher.apk to
+/system/priv-app + `pm uninstall` of the data update, the VHAL binary to
+/vendor/bin/hw (stop service, remount rw, push, restorecon), one reboot.
+Then bench_launcher_push.sh again for the remembered-fix build (launcher
+aaf59a06 -> 95a8ceaf -> +fix cache). Findings:
+- Backlight follows Settings brightness exactly (120 -> 120/255, 255 ->
+  255/255 in /sys/class/backlight/11-0045): evening dimming is live.
+- The cluster strip came up black after each launcher replacement (HOME
+  intent fixes it; the push script now sends one). Not seen on a clean
+  boot of a flashed image so far.
+- Indoors the GNSS (/dev/ttyAMA10) has no fix, so the sun logic stays
+  silent and the dash boots in night mode. Fixed by remembering the last
+  fix (launcher commit above), which needs one real fix first; until then
+  Rider settings > Day / night > Day pins the day theme. NOTE the shell
+  test-provider trick (`cmd location providers add-test-provider gps` +
+  set-test-provider-location) feeds user 10 on cuttlefish but NOT on the
+  Pi (mock lands on user 0 whose location is off; enabling it did not
+  help either) - do not spend time on it, take the bike outside.
+- The once-per-boot SystemUI DeadSystemException is still there (known).
