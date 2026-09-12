@@ -11,14 +11,28 @@
 #include <android-base/logging.h>
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
+#include <csignal>
+#include <unistd.h>
 
 using ::android::hardware::automotive::vehicle::DefaultVehicleHal;
 using ::android::hardware::automotive::vehicle::motorcycle::MotorcycleVehicleHardware;
+
+static MotorcycleVehicleHardware* gHardware = nullptr;
+
+// init stops the service with SIGTERM (reboot, `stop`), which by default
+// kills the process before any destructor runs; flush the odometer first.
+// property_set is not async-signal-safe, but at shutdown that is acceptable.
+static void onTerminate(int) {
+    if (gHardware != nullptr) gHardware->flushForShutdown();
+    _exit(0);
+}
 
 int main(int /* argc */, char* /* argv */[]) {
     LOG(INFO) << "Motorcycle Vehicle HAL service starting...";
 
     auto hardware = std::make_unique<MotorcycleVehicleHardware>();
+    gHardware = hardware.get();
+    signal(SIGTERM, onTerminate);
     auto vhal = ndk::SharedRefBase::make<DefaultVehicleHal>(std::move(hardware));
 
     LOG(INFO) << "Registering Vehicle HAL service...";

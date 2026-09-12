@@ -1008,6 +1008,27 @@ TEST_F(MotorcycleVehicleHardwareTest, RideSummaryHasEnergyAndAppendsRideLog) {
     rmdir(dir.c_str());
 }
 
+TEST_F(MotorcycleVehicleHardwareTest, PersistedRideSummaryIsRestoredAtBoot) {
+    // Regression: the restore used to run from loadConfig(), before the
+    // property values existed, and segfaulted on the first boot after the
+    // first persisted ride (bike, 2026-09-12).
+    property_set("persist.vendor.motodash.ride.seq", "3");
+    property_set("persist.vendor.motodash.ride.meters", "1234");
+    property_set("persist.vendor.motodash.ride.seconds", "321");
+    property_set("persist.vendor.motodash.ride.wh", "77.5");
+    property_set("persist.vendor.motodash.ride.whperkm", "62.8");
+    property_set("persist.vendor.motodash.ride.maxmps", "21.5");
+    property_set("persist.vendor.motodash.ride.maxleanl", "12");
+    property_set("persist.vendor.motodash.ride.maxleanr", "34");
+    auto hw = std::make_unique<MotorcycleVehicleHardware>("vcan-test-none");
+    MotorcycleVehicleHardwareTestPeer peer(hw.get());
+    EXPECT_EQ(peer.currentValue(VENDOR_RIDE_SEQ).value.int32Values.at(0), 3);
+    EXPECT_FLOAT_EQ(peer.currentValue(VENDOR_RIDE_DISTANCE_M).value.floatValues.at(0), 1234.0f);
+    EXPECT_FLOAT_EQ(peer.currentValue(VENDOR_RIDE_ENERGY_WH).value.floatValues.at(0), 77.5f);
+    EXPECT_FLOAT_EQ(peer.currentValue(VENDOR_RIDE_MAX_LEAN_R).value.floatValues.at(0), 34.0f);
+    property_set("persist.vendor.motodash.ride.seq", "");
+}
+
 TEST_F(MotorcycleVehicleHardwareTest, ShortShuffleIsNotARide) {
     // 20 s at 5 m/s = 100 m (moving the bike in the garage): no summary.
     int64_t t = 1000000000LL;

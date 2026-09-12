@@ -156,6 +156,8 @@ constexpr int32_t VENDOR_RIDE_WH_PER_KM = 0x21600052;     // float, net incl. re
 constexpr int32_t VENDOR_RIDE_MAX_SPEED_MPS = 0x21600053; // float
 constexpr int32_t VENDOR_RIDE_SEQ = 0x21400049;           // int, increments per summary
 constexpr int32_t VENDOR_RIDE_ENERGY_WH = 0x21600054;     // float, net Wh drawn incl. regen
+constexpr int32_t VENDOR_RIDE_ACTIVE = 0x21400080;        // int, 1 while a ride is being accounted
+constexpr int32_t VENDOR_CFG_RIDE_END = 0x21400081;       // int RW: write 1 = end the ride now
 // Ride history: the last kRideLogPublishedLines of <capture dir>/rides.csv as one
 // string ("seq,end_epoch,meters,moving_s,wh,wh_per_km,max_mps,max_lean_l,max_lean_r,
 // soc_start,soc_end" per line, newest last). Republished after every ride.
@@ -275,6 +277,8 @@ constexpr int GEAR_DRIVE = 3;
 
 class MotorcycleVehicleHardware : public IVehicleHardware {
   public:
+    /** Flush persisted counters; for the service's SIGTERM handler. */
+    void flushForShutdown();
     // canInterfaceOverride: when non-empty, use this CAN interface instead of
     // the persist.vendor.motodash.can_interface property. Used by host-side
     // tests and the replay tool (e.g. "vcan0").
@@ -340,8 +344,10 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     void trackRide(float speedMps, int64_t timestamp);
     void addRideEnergy(double wh);
     void endRideIfDue(int64_t nowNs, bool linkDead);
+    void publishRideActive(bool active, int64_t timestamp);
     void appendRideLog(const std::string& line);   // rides.csv in mCaptureDir
     void loadRideLog();                            // at startup: file -> VENDOR_RIDE_LOG
+    void restorePersistedRide();                   // after initPropertyConfigs()
     void publishRideLog(int64_t timestamp);        // last lines of the file
     void publishRideSummary(float meters, float seconds, float wh, float whPerKm, float maxMps,
                             float maxLeanL, float maxLeanR, int32_t seq, int64_t timestamp);
@@ -419,9 +425,9 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     
     // GPIO state
     int mGpioChipFd = -1;
-    int mGpioLeftTurnPin = 16;   // bike wiring defaults, see readConfig
+    int mGpioLeftTurnPin = 21;   // bike wiring defaults (measured 2026-09-12), see readConfig
     int mGpioRightTurnPin = 20;
-    int mGpioHighBeamPin = 21;
+    int mGpioHighBeamPin = 12;
     std::atomic<bool> mGpioActiveLow{true};
     // Set when active-low changes at runtime: the GPIO thread re-applies the
     // line bias (pull-up for active-low, pull-down otherwise).
@@ -519,6 +525,7 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     double mRideEnergyWh = 0.0;
     float mRideStartSoc = -1.0f;   // pack % when the ride started (-1 = unknown)
     std::vector<std::string> mRideLogLines;  // data lines of rides.csv (no header)
+    std::atomic<bool> mRideEndRequested{false};  // VENDOR_CFG_RIDE_END, serviced by endRideIfDue
     float mRideMaxSpeedMps = 0.0f;
     float mRideMaxLeanL = 0.0f;  // deg, this ride, speed-gated (imu thread)
     float mRideMaxLeanR = 0.0f;

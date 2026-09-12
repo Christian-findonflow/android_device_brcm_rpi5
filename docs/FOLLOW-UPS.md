@@ -461,7 +461,7 @@ controller "over voltage" flag gated on the pack's full-charge voltage
 Open:
 - **Left indicator**: GPIO 16 never toggles; no free header line toggles
   either, so the opto's left channel/wire is not delivering (Christian has a
-  loose wire to check). Pins: left 36 (GPIO16), right 38 (GPIO20), high beam
+  loose wire to check). Pins: left 40 (GPIO21, measured 2026-09-12; the 09-05 note said 36), right 38 (GPIO20), high beam 32 (GPIO12, not
   40 (GPIO21), GND 34/39. Reassignable in Workshop.
 - **High beam input glitch**: GPIO 21 read "on" from 13:22 to ~13:30 with the
   beam off (then recovered). Watch for a flaky opto channel / wire.
@@ -1539,3 +1539,39 @@ Test plan / things to look at:
   until then Rider settings > Day / night > Day.
 - After the session: `dmesg | grep -i undervolt` (bike supply check),
   pull the new capture logs, look at rides.csv.
+
+## Live session with the dash on the bike (2026-09-12, 11:50-12:35)
+
+Watched over adb with a change-driven HAL dump (bench_bike_watch.sh /
+Monitor) while Christian worked the switches, gears, wheel and pedals.
+- Indicators/high beam: the "left indicator lights the beam" bug was
+  WIRING as suspected, but the fix was a remap, not a rewire: the left
+  opto output is on header pin 40 (BCM 21, the old beam pin), the high
+  beam on pin 32 (BCM 12, found with gpioscan), pin 36 (BCM 16) is unused.
+  Remapped in the Workshop props and as compiled defaults (21/20/12). The
+  left tap is steady while the switch is on and flashes under hazards, the
+  right tap flashes with the lamp; so the HAL holds "engaged" across gaps
+  (500 ms; 1.2 s felt slow on release) and the cluster + top-bar icons
+  blink themselves at ~85/min.
+- LESSON: never export/request header GPIOs blindly (sysfs or chardev) -
+  BCM 7-11 are the CAN HAT's SPI and requesting them killed both CAN links
+  ("CRC read error ... data=00"); only a reboot restored the pin mux.
+  gpioscan touches free pins only (4 5 6 12 13 17 18 19 22 23 26 27).
+- CAN side all correct: brake flag, P/R/D, modes incl. Sport, gear-linked
+  parking brake, speed/odometer/trip from the spun wheel, first real ride
+  in the history (336 m, 56 s, 8.0 Wh, 23.8 Wh/km, max 27.6 km/h, SoC
+  95.5->95.5, clock set from Wi-Fi). Side stand is not wired - ignore.
+  No undervoltage on the bike's supply throughout.
+- Bugs found and fixed live: (1) restoring the persisted ride summary at
+  boot segfaulted (restore ran before the property values existed; first
+  boot after the first persisted ride; regression gtest added, 71/71);
+  (2) odometer lost the last <500 m of a ride on reboot/key-off: now
+  persisted at every ride end (also too-short ones), threshold 100 m, and
+  on SIGTERM via a handler in VehicleService (init never ran the
+  destructor); (3) my RIDE_ACTIVE/CFG_RIDE_END ids collided with
+  SOC_FAN_LEVEL/MAX (0x70/71) -> moved to 0x80/81.
+- New: END RIDE control in the cockpit Range card while a ride is open
+  (VENDOR_RIDE_ACTIVE 0x21400080, write VENDOR_CFG_RIDE_END 0x21400081);
+  verified: opens on the first wheel movement, tap ends the ride within a
+  second, control clears.
+- Not tested: charger (none to hand), faults (none raised), GPS (indoors).

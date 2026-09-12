@@ -43,7 +43,8 @@ MotorcycleVehicleHardware::MotorcycleVehicleHardware(std::string canInterfaceOve
     }
     
     initPropertyConfigs();
-    
+    restorePersistedRide();
+
     // Start CAN initialization in a separate thread to allow retries
     // CAN interfaces may not be available immediately at boot
     mRunning = true;
@@ -67,6 +68,12 @@ MotorcycleVehicleHardware::MotorcycleVehicleHardware(std::string canInterfaceOve
     // keeps probing, so a module plugged in later just starts working.
     mImuThread = std::thread(&MotorcycleVehicleHardware::imuThread, this);
     LOG(INFO) << "BMS polling thread started";
+}
+
+// Called from the service's SIGTERM handler: init stops the service with a
+// signal, which never runs the destructor, so the odometer flush lives here.
+void MotorcycleVehicleHardware::flushForShutdown() {
+    persistDistanceIfDue(elapsedRealtimeNano(), /*force=*/true);
 }
 
 MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
@@ -104,6 +111,35 @@ MotorcycleVehicleHardware::~MotorcycleVehicleHardware() {
     if (mGpioChipFd >= 0) {
         close(mGpioChipFd);
     }
+}
+
+// Restores the last ride summary and the ride history. Must run AFTER
+// initPropertyConfigs(): publishRideSummary/publishRideLog write into
+// mCurrentValues entries that only exist once the configs are declared.
+// (Running it from loadConfig() segfaulted on the first boot after the
+// first persisted ride, 2026-09-12 on the bike.)
+void MotorcycleVehicleHardware::restorePersistedRide() {
+    char propValue[PROPERTY_VALUE_MAX];
+    if (property_get("persist.vendor.motodash.ride.seq", propValue, "") > 0) {
+        int32_t seq = atoi(propValue);
+        char m[PROPERTY_VALUE_MAX], s[PROPERTY_VALUE_MAX], w[PROPERTY_VALUE_MAX], x[PROPERTY_VALUE_MAX];
+        property_get("persist.vendor.motodash.ride.meters", m, "0");
+        property_get("persist.vendor.motodash.ride.seconds", s, "0");
+        property_get("persist.vendor.motodash.ride.whperkm", w, "0");
+        property_get("persist.vendor.motodash.ride.maxmps", x, "0");
+        char ll[PROPERTY_VALUE_MAX], lr[PROPERTY_VALUE_MAX], e[PROPERTY_VALUE_MAX];
+        property_get("persist.vendor.motodash.ride.maxleanl", ll, "0");
+        property_get("persist.vendor.motodash.ride.maxleanr", lr, "0");
+        property_get("persist.vendor.motodash.ride.wh", e, "0");
+        {
+            std::lock_guard<std::mutex> lock(mRideMutex);
+            mRideSeq = seq;
+        }
+        publishRideSummary(atof(m), atof(s), atof(e), atof(w), atof(x), atof(ll), atof(lr), seq,
+                           elapsedRealtimeNano());
+        LOG(INFO) << "Restored last ride summary #" << seq;
+    }
+    loadRideLog();
 }
 
 void MotorcycleVehicleHardware::initPropertyConfigs() {
@@ -533,6 +569,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     addFloatVendorProp(VENDOR_RIDE_MAX_SPEED_MPS, 0.0f, 100.0f, 0.0f);
     addIntVendorProp(VENDOR_RIDE_SEQ, 0);
     addFloatVendorProp(VENDOR_RIDE_ENERGY_WH, -100000.0f, 100000.0f, 0.0f);
+    addIntVendorProp(VENDOR_RIDE_ACTIVE, 0);
     {
         // Ride history as a string; ON_CHANGE, republished after every ride.
         VehiclePropConfig config;
@@ -733,6 +770,7 @@ void MotorcycleVehicleHardware::initPropertyConfigs() {
     // settings on the fly so a first-ride discrepancy needs no rebuild.
     addConfigProp(VENDOR_CFG_GEAR_BASE, false, 0.0f, mGearBase.load());
     addConfigProp(VENDOR_CFG_IMU_LEVEL, false, 0.0f, 0);
+    addConfigProp(VENDOR_CFG_RIDE_END, false, 0.0f, 0);
     addConfigProp(VENDOR_CFG_PACK_MAX_VOLTAGE, true, mPackMaxVoltage.load(), 0);
 
     // Standard display-unit properties. configArray lists the supported
@@ -1537,7 +1575,7 @@ void MotorcycleVehicleHardware::bmsPollingThread() {
 // persist.vendor.motodash.* so they survive a reboot; writes are throttled
 // because every persist property write rewrites the persistent property file.
 namespace {
-constexpr double kPersistDistanceThresholdM = 500.0;
+constexpr double kPersistDistanceThresholdM = 100.0;  // was 500: a short ride lost its tail
 constexpr int64_t kPersistIntervalNs = 30LL * 1000000000LL;
 // Ignore implausible gaps (first frame after boot, or a pause in traffic) so a
 // stale timestamp cannot add a large bogus distance in one step.
@@ -1758,6 +1796,7 @@ void MotorcycleVehicleHardware::trackRide(float speedMps, int64_t timestamp) {
         mRideLastTrackNs = timestamp;
         mRideLastMoveNs = timestamp;
         LOG(INFO) << "Ride started at odo " << mOdometerMeters << " m";
+        publishRideActive(true, timestamp);
         return;
     }
     int64_t delta = timestamp - mRideLastTrackNs;
@@ -1777,15 +1816,20 @@ void MotorcycleVehicleHardware::addRideEnergy(double wh) {
 void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
     float meters, seconds, wh, whPerKm, maxMps, maxLeanL, maxLeanR, socStart, socEnd;
     int32_t seq;
+    const char* endedHow = "";
     {
         std::lock_guard<std::mutex> lock(mRideMutex);
         if (!mRideActive) return;
         bool parkedLong = (nowNs - mRideLastMoveNs) > kRideStandstillEndNs;
-        if (!linkDead && !parkedLong) return;
+        bool manual = mRideEndRequested.exchange(false);
+        if (!linkDead && !parkedLong && !manual) return;
         mRideActive = false;
+        endedHow = linkDead ? "key off" : manual ? "dash" : "parked";
         double distance = mOdometerMeters - mRideStartMeters;
         if (distance < kRideMinMeters) {
             LOG(INFO) << "Ride ended after " << distance << " m - too short to summarise";
+            publishRideActive(false, nowNs);
+            persistDistanceIfDue(nowNs, /*force=*/true);  // the odometer still moved
             return;
         }
         meters = static_cast<float>(distance);
@@ -1799,7 +1843,8 @@ void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
         socEnd = mLastSocPercent;
         seq = ++mRideSeq;
     }
-    LOG(INFO) << "Ride #" << seq << " ended (" << (linkDead ? "key off" : "parked") << "): "
+    publishRideActive(false, nowNs);
+    LOG(INFO) << "Ride #" << seq << " ended (" << endedHow << "): "
               << meters << " m, " << seconds << " s moving, " << whPerKm << " Wh/km, max "
               << maxMps << " m/s, lean " << maxLeanL << "L/" << maxLeanR << "R";
     publishRideSummary(meters, seconds, wh, whPerKm, maxMps, maxLeanL, maxLeanR, seq, nowNs);
@@ -1814,6 +1859,10 @@ void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
              maxLeanL, maxLeanR, socStart, socEnd);
     appendRideLog(line);
     publishRideLog(nowNs);
+    // A ride end is the natural checkpoint for the odometer/trip as well: the
+    // dash may be powered down soon after, and the throttled persist would
+    // otherwise drop up to kPersistDistanceThresholdM of the ride.
+    persistDistanceIfDue(nowNs, /*force=*/true);
     persistConfig("persist.vendor.motodash.ride.wh", std::to_string(wh));
     persistConfig("persist.vendor.motodash.ride.maxleanl", std::to_string(maxLeanL));
     persistConfig("persist.vendor.motodash.ride.maxleanr", std::to_string(maxLeanR));
@@ -1822,6 +1871,14 @@ void MotorcycleVehicleHardware::endRideIfDue(int64_t nowNs, bool linkDead) {
     persistConfig("persist.vendor.motodash.ride.whperkm", std::to_string(whPerKm));
     persistConfig("persist.vendor.motodash.ride.maxmps", std::to_string(maxMps));
     persistConfig("persist.vendor.motodash.ride.seq", std::to_string(seq));
+}
+
+void MotorcycleVehicleHardware::publishRideActive(bool active, int64_t timestamp) {
+    std::lock_guard<std::mutex> lock(mValuesMutex);
+    auto& v = mCurrentValues[VENDOR_RIDE_ACTIVE];
+    v.value.int32Values[0] = active ? 1 : 0;
+    v.timestamp = timestamp;
+    notifyPropertyChange(VENDOR_RIDE_ACTIVE, v);
 }
 
 void MotorcycleVehicleHardware::publishRideSummary(float meters, float seconds, float wh,
@@ -2247,6 +2304,15 @@ StatusCode MotorcycleVehicleHardware::applyConfigValue(const VehiclePropValue& v
             LOG(INFO) << "Gear base set to " << v << " (raw " << v << " = P)";
             break;
         }
+        case VENDOR_CFG_RIDE_END: {
+            int32_t v;
+            if (!intArg(0, 1, &v)) return StatusCode::INVALID_ARG;
+            if (v == 1) {
+                mRideEndRequested = true;  // serviced by the next endRideIfDue tick
+                LOG(INFO) << "Ride end requested from the dash";
+            }
+            break;
+        }
         case VENDOR_CFG_IMU_LEVEL: {
             int32_t v;
             if (!intArg(0, 1, &v)) return StatusCode::INVALID_ARG;
@@ -2510,26 +2576,6 @@ void MotorcycleVehicleHardware::loadConfig() {
               << (mTripMeters / 1000.0) << "km";
 
     // Range model: learned consumption and configured pack energy
-    if (property_get("persist.vendor.motodash.ride.seq", propValue, "") > 0) {
-        int32_t seq = atoi(propValue);
-        char m[PROPERTY_VALUE_MAX], s[PROPERTY_VALUE_MAX], w[PROPERTY_VALUE_MAX], x[PROPERTY_VALUE_MAX];
-        property_get("persist.vendor.motodash.ride.meters", m, "0");
-        property_get("persist.vendor.motodash.ride.seconds", s, "0");
-        property_get("persist.vendor.motodash.ride.whperkm", w, "0");
-        property_get("persist.vendor.motodash.ride.maxmps", x, "0");
-        char ll[PROPERTY_VALUE_MAX], lr[PROPERTY_VALUE_MAX], e[PROPERTY_VALUE_MAX];
-        property_get("persist.vendor.motodash.ride.maxleanl", ll, "0");
-        property_get("persist.vendor.motodash.ride.maxleanr", lr, "0");
-        property_get("persist.vendor.motodash.ride.wh", e, "0");
-        {
-            std::lock_guard<std::mutex> lock(mRideMutex);
-            mRideSeq = seq;
-        }
-        publishRideSummary(atof(m), atof(s), atof(e), atof(w), atof(x), atof(ll), atof(lr), seq,
-                           elapsedRealtimeNano());
-        LOG(INFO) << "Restored last ride summary #" << seq;
-    }
-    loadRideLog();
     if (property_get("persist.vendor.motodash.whperkm", propValue, "") > 0) {
         float v = strtof(propValue, nullptr);
         if (v >= kMinUsableWhPerKm && v <= kMaxChunkWhPerKm) {
@@ -2574,16 +2620,18 @@ void MotorcycleVehicleHardware::loadConfig() {
               << " canTemps=0x" << mCanIdControllerTemps
               << " canBms=0x" << mCanIdBms << std::dec;
     
-    // Defaults are the bike's wiring (header pins 36/38/40 = BCM 16/20/21 through
-    // the optoisolators, active low) so a reflash - which wipes persist.vendor.* -
-    // does not silently disable the indicators; the Workshop can still reassign.
-    if (property_get("persist.vendor.motodash.gpio.left_turn", propValue, "16") > 0) {
+    // Defaults are the bike's wiring as measured on 2026-09-12 (left indicator
+    // header pin 40 = BCM 21, right pin 38 = BCM 20, high beam pin 32 = BCM 12,
+    // through the optoisolators, active low; pin 36 / BCM 16 is unused) so a
+    // reflash - which wipes persist.vendor.* - does not silently disable the
+    // inputs; the Workshop can still reassign.
+    if (property_get("persist.vendor.motodash.gpio.left_turn", propValue, "21") > 0) {
         mGpioLeftTurnPin = atoi(propValue);
     }
     if (property_get("persist.vendor.motodash.gpio.right_turn", propValue, "20") > 0) {
         mGpioRightTurnPin = atoi(propValue);
     }
-    if (property_get("persist.vendor.motodash.gpio.high_beam", propValue, "21") > 0) {
+    if (property_get("persist.vendor.motodash.gpio.high_beam", propValue, "12") > 0) {
         mGpioHighBeamPin = atoi(propValue);
     }
     // Accepts "1"/"0" (what the HAL persists) and "true"/"false" (what the
@@ -2754,6 +2802,10 @@ void MotorcycleVehicleHardware::gpioReaderThread() {
     int lastTurnState = -1;
     int lastHighBeamState = -1;
     int lastRawBits = -1;
+    // Longer than a flasher off-gap (~350 ms at 85/min) but short enough that
+    // the arrow stops within half a second of the switch (rider feedback).
+    constexpr int64_t kIndicatorHoldNs = 500LL * 1000000LL;
+    int64_t leftSeenNs = 0, rightSeenNs = 0;
     auto reconfigure = [&biasFlags](int lineFd) {
         if (lineFd < 0) return;
         struct gpio_v2_line_config cfg;
@@ -2791,6 +2843,14 @@ void MotorcycleVehicleHardware::gpioReaderThread() {
         // Apply active-low logic if needed
         bool leftActive = (leftRaw >= 0) && (mGpioActiveLow ? (leftRaw == 0) : (leftRaw == 1));
         bool rightActive = (rightRaw >= 0) && (mGpioActiveLow ? (rightRaw == 0) : (rightRaw == 1));
+        // The taps differ per side on the bike (one flashes with the lamp,
+        // one is steady from the switch), so "indicator engaged" is held
+        // across flasher gaps and the cluster blinks the arrow itself.
+        int64_t nowNs = elapsedRealtimeNano();
+        if (leftActive) leftSeenNs = nowNs;
+        if (rightActive) rightSeenNs = nowNs;
+        leftActive = leftActive || (leftSeenNs > 0 && nowNs - leftSeenNs < kIndicatorHoldNs);
+        rightActive = rightActive || (rightSeenNs > 0 && nowNs - rightSeenNs < kIndicatorHoldNs);
         bool highBeamActive = (highBeamRaw >= 0) && (mGpioActiveLow ? (highBeamRaw == 0) : (highBeamRaw == 1));
         
         // Determine turn signal state

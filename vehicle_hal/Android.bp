@@ -166,3 +166,15 @@ cc_binary {
         "-Werror",
     ],
 }
+
+// Finds which free header pin an optoisolator output lands on (pull-up
+// on the free lines only, prints levels once a second). Bench/bike tool.
+cc_binary {
+    name: "gpioscan",
+    vendor: true,
+    srcs: ["tests/GpioScan.cpp"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+}
