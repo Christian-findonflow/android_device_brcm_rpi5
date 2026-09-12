@@ -1575,3 +1575,23 @@ Monitor) while Christian worked the switches, gears, wheel and pedals.
   verified: opens on the first wheel movement, tap ends the ride within a
   second, control clears.
 - Not tested: charger (none to hand), faults (none raised), GPS (indoors).
+Second half of the session (12:33-12:50):
+- After the combined SystemUI+VHAL push the dash dropped off Wi-Fi and
+  Christian power-cycled it; the hard cut rolled
+  /data/property/persistent_properties back to an older snapshot (pins
+  came up 16/20/21 again) and the launcher then wrote -1 pins into the HAL
+  from its own wiped preferences. Fixes: bench_launcher_push.sh no longer
+  `pm uninstall`s the launcher (that wiped rider settings and Workshop
+  pins on every push); the Workshop only pushes pins it actually holds
+  (DashPreferences.hasGpioPins / non-negative entries); compiled HAL
+  defaults are the real wiring. A power-cut rollback can still happen -
+  defaults cover it.
+- Battery Details in day mode: root and text were hard-coded dark-theme
+  hex (values invisible on the light cards); moved to the neo_* palette
+  with MotorcycleTheme.load(). Other settings screens still fixed dark.
+- Top-bar turn icons blink like the cluster arrows (VehicleMetricsController).
+- Odometer: 336 m + 65 m of wheel tests were lost to reboots before the
+  persist-at-ride-end fix landed; from now on every ride end (and SIGTERM)
+  writes it.
+- Wi-Fi/adb drops for ~10 s roughly once a minute on the bike (ADB LOST /
+  BACK in the watch) - harmless for riding, worth a look for the bench.

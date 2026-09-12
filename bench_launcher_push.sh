@@ -9,7 +9,9 @@ APK=$OUT/system/priv-app/CarLauncher/CarLauncher.apk
 adb connect $IP:5555 >/dev/null; adb root >/dev/null 2>&1; sleep 4; adb connect $IP:5555 >/dev/null; adb wait-for-device
 adb shell 'mount -o remount,rw / && echo root-rw' || exit 1
 adb push "$APK" /system/priv-app/CarLauncher/CarLauncher.apk | tail -1
-adb shell 'chmod 644 /system/priv-app/CarLauncher/CarLauncher.apk; chcon u:object_r:system_file:s0 /system/priv-app/CarLauncher/CarLauncher.apk; pm uninstall com.android.car.carlauncher >/dev/null 2>&1; sync'
+# Only drop a /data update of the launcher if one exists; a plain `pm uninstall`
+# also wipes the launcher's own data (rider settings, Workshop GPIO pins...).
+adb shell 'chmod 644 /system/priv-app/CarLauncher/CarLauncher.apk; chcon u:object_r:system_file:s0 /system/priv-app/CarLauncher/CarLauncher.apk; if pm path com.android.car.carlauncher | grep -q /data/app/; then pm uninstall -k com.android.car.carlauncher >/dev/null 2>&1; fi; sync'
 echo "rebooting $IP"; adb reboot; sleep 30
 for i in $(seq 1 30); do adb wait-for-device >/dev/null 2>&1; b=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r'); [ "$b" = "1" ] && break; sleep 5; done
 echo "booted after ${i}x5s"; sleep 20
