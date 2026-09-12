@@ -1464,3 +1464,24 @@ aaf59a06 -> 95a8ceaf -> +fix cache). Findings:
   Pi (mock lands on user 0 whose location is off; enabling it did not
   help either) - do not spend time on it, take the bike outside.
 - The once-per-boot SystemUI DeadSystemException is still there (known).
+
+## Bench hang after a reboot = power supply, not software (2026-09-12 10:20)
+
+After a plain `adb reboot` the Pi booted, then the screen went dark and it
+dropped off the network; a power cycle brought it back. Evidence from the
+next boot: `dmesg` shows `hwmon hwmon0: Undervoltage detected!` at 5 s,
+61 s and once more (with "Voltage normalised" between), and
+`/proc/device-tree/chosen/power/max_current` = 0x0bb8 = **3000 mA**: the
+USB-C supply/cable on the bench only negotiates a 3 A contract. A Pi 5 with
+NVMe, the 7" display at full backlight, Wi-Fi/BT, the CAN HAT and the IMU
+draws more than that at peaks (boot after an APK update is the worst case:
+ART optimises the new launcher while everything else starts), so the rail
+sagged and the board hung. The previous boot's IMU capture file stopped
+growing 7 s after the HAL started (10:20:05) - that is the hang moment.
+No dropbox crash/watchdog entries, no tombstones, no pstore on this
+kernel. Fix: a supply that negotiates 5 A (official 27 W PSU shows
+max_current 5000) or, on the bike, a 5 V/5 A DC-DC with a short thick lead;
+check with `cat /proc/device-tree/chosen/power/max_current` and
+`dmesg | grep -i undervolt` after any change. Also: the ride capture
+switch has been on all day (183 MB in /data/vendor/motodash) - switch it
+off when not needed.
