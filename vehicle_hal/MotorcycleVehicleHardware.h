@@ -419,9 +419,9 @@ class MotorcycleVehicleHardware : public IVehicleHardware {
     
     // GPIO state
     int mGpioChipFd = -1;
-    int mGpioLeftTurnPin = -1;
-    int mGpioRightTurnPin = -1;
-    int mGpioHighBeamPin = -1;
+    int mGpioLeftTurnPin = 16;   // bike wiring defaults, see readConfig
+    int mGpioRightTurnPin = 20;
+    int mGpioHighBeamPin = 21;
     std::atomic<bool> mGpioActiveLow{true};
     // Set when active-low changes at runtime: the GPIO thread re-applies the
     // line bias (pull-up for active-low, pull-down otherwise).

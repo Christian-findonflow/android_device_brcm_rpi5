@@ -1512,3 +1512,30 @@ buck, and the bike path has no lossy USB-C lead. Position: VERIFY, don't
 replace - after normal rides `adb shell dmesg | grep -i undervolt` must
 stay empty; only if it ever isn't, fit the bigger buck. The bench 3 A
 USB-C supply/cable is a separate matter.
+
+## Dash back on the bike, bench-style test (2026-09-12 afternoon)
+
+Prep: capture logs backed up to ~/images/captures-2026-09-12-bench/ and
+cleared on the device (logcat too); the GPIO pins were all -1 on the
+device - a reflash wipes persist.vendor.*, so the 09-05 Workshop settings
+(left 16, right 20, high beam 21, active low) were gone. Restored by
+setprop for today (applies at the next boot = the move to the bike) and
+the VHAL now compiles those as defaults so it cannot happen again.
+Watch live with `bench_bike_watch.sh` (speed, gear, brake, flags, turn,
+beam, raw GPIO bits, link, faults, SoC every 0.5 s).
+Test plan / things to look at:
+- Indicators + high beam: the HAL reads the three lines independently
+  (gpioReaderThread), there is no software path that couples an indicator
+  to the beam. If an indicator lights the beam icon too, the raw GPIO bits
+  will show GPIO21 going low with the indicator: an opto channel / wiring /
+  ground issue (the 09-05 session already saw GPIO21 glitch "on" for 8 min
+  with the beam off). Also re-check the left channel (GPIO16 never toggled
+  on 09-05, loose wire suspected).
+- Spin the rear wheel: speed, odometer/trip advance, ride accounting
+  (a >= 200 m "ride" ends 5 min after the wheel stops or at key-off and
+  should land in rides.csv with Wh/SoC columns from the BMS PIDs).
+- Gears/modes P/R/D + Sport, brake, side stand, charging dwell, faults.
+- Day/night: the first outdoor GPS fix seeds the remembered position;
+  until then Rider settings > Day / night > Day.
+- After the session: `dmesg | grep -i undervolt` (bike supply check),
+  pull the new capture logs, look at rides.csv.

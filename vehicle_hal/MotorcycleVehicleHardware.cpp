@@ -2574,13 +2574,16 @@ void MotorcycleVehicleHardware::loadConfig() {
               << " canTemps=0x" << mCanIdControllerTemps
               << " canBms=0x" << mCanIdBms << std::dec;
     
-    if (property_get("persist.vendor.motodash.gpio.left_turn", propValue, "-1") > 0) {
+    // Defaults are the bike's wiring (header pins 36/38/40 = BCM 16/20/21 through
+    // the optoisolators, active low) so a reflash - which wipes persist.vendor.* -
+    // does not silently disable the indicators; the Workshop can still reassign.
+    if (property_get("persist.vendor.motodash.gpio.left_turn", propValue, "16") > 0) {
         mGpioLeftTurnPin = atoi(propValue);
     }
-    if (property_get("persist.vendor.motodash.gpio.right_turn", propValue, "-1") > 0) {
+    if (property_get("persist.vendor.motodash.gpio.right_turn", propValue, "20") > 0) {
         mGpioRightTurnPin = atoi(propValue);
     }
-    if (property_get("persist.vendor.motodash.gpio.high_beam", propValue, "-1") > 0) {
+    if (property_get("persist.vendor.motodash.gpio.high_beam", propValue, "21") > 0) {
         mGpioHighBeamPin = atoi(propValue);
     }
     // Accepts "1"/"0" (what the HAL persists) and "true"/"false" (what the
