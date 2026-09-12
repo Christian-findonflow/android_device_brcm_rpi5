@@ -1504,3 +1504,11 @@ HAT draws from the Pi instead of the other way round. Confirm with
 max_current / dmesg undervoltage checks. Sources: Seeed wiki product
 page (12-24 V DC input, "selectable" supply, no current figure), industrial
 datasheet 103990563 (same), schematic PDF (parts above).
+Christian's correction (same day): the bike has run for many hours on the
+HAT's supply without a single symptom. The datasheet reading stands, but
+the field evidence wins: the 2 A is a polyfuse hold current (trips only on
+sustained ~2x overload), peaks are covered by the reservoir and the 3 A
+buck, and the bike path has no lossy USB-C lead. Position: VERIFY, don't
+replace - after normal rides `adb shell dmesg | grep -i undervolt` must
+stay empty; only if it ever isn't, fit the bigger buck. The bench 3 A
+USB-C supply/cable is a separate matter.
