@@ -2855,14 +2855,9 @@ void MotorcycleVehicleHardware::gpioReaderThread() {
         
         // Determine turn signal state
         // VehicleTurnSignal: NONE=0, RIGHT=1, LEFT=2
-        int turnState = 0;
-        if (leftActive && rightActive) {
-            turnState = 2;  // Hazard - show LEFT
-        } else if (leftActive) {
-            turnState = 2;  // LEFT
-        } else if (rightActive) {
-            turnState = 1;  // RIGHT
-        }
+        // TURN_SIGNAL_LIGHT_STATE is @data_enum_bit_flags: RIGHT=1, LEFT=2,
+        // both set for hazards (the old TURN_SIGNAL_STATE could not say that).
+        int turnState = (leftActive ? 2 : 0) | (rightActive ? 1 : 0);
         
         // Update turn signal if changed
         if (turnState != lastTurnState) {

@@ -1595,3 +1595,12 @@ Second half of the session (12:33-12:50):
   writes it.
 - Wi-Fi/adb drops for ~10 s roughly once a minute on the bike (ADB LOST /
   BACK in the watch) - harmless for riding, worth a look for the bench.
+Wrap-up (13:15): hazards now publish TURN_SIGNAL_LIGHT_STATE = 3 (the
+property is @data_enum_bit_flags; the old code mapped both to LEFT) and
+both arrows blink in the cluster and the top bar; END RIDE pill in the
+Range card header line (top right, fixed row height); Back pill on
+Battery Details on the palette. Ride #3 ended from the dash (240 m, 34 s,
+6.2 Wh, 25.9 Wh/km, max 34 km/h, SoC 95->95) and the odometer was
+persisted at that moment (115864 m = live). Christian: "everything
+working as expected". Wi-Fi in the garage is weak: a 74 MB push took
+6 min at 0.2 MB/s with periodic 10-20 s drops.
