@@ -1485,3 +1485,22 @@ check with `cat /proc/device-tree/chosen/power/max_current` and
 `dmesg | grep -i undervolt` after any change. Also: the ride capture
 switch has been on all day (183 MB in /data/vendor/motodash) - switch it
 off when not needed.
+
+## Bike supply: the CAN HAT's 12-24 V input is a 2-3 A source (2026-09-12)
+
+Seeed 2-Channel CAN-BUS(FD) HAT schematic (CC-BY-SA, sheet "power"):
+VCC_EXT -> D1 B340B (3 A Schottky) -> F6 polyfuse "2A" -> C118 330 uF/35 V ->
+U14 TI TPS54302 (4.5-28 V in, 3 A buck) -> L6 10 uH -> 5 V rail annotated
+"2A" -> Q1 AON7403 P-FET pass switch annotated "Current 3A" -> Pi header
+5 V (SW1 selects DC vs Pi supply). So the HAT can feed the Pi about 2 A
+sustained (the polyfuse hold current) and 3 A absolute (buck/diode/FET).
+A Pi 5 + NVMe + 7" display + Wi-Fi/BT + this HAT + IMU exceeds that at
+peaks; the bench already browns out on a 3 A USB-C contract. Plan for the
+bike: a separate 12 V -> 5.1 V, >= 5 A automotive buck into the Pi's USB-C
+with `usb_max_current_enable=1` in boot/config.txt (lets the firmware
+assume 5 A from a non-PD supply; the Pi read 0 today), or into the header
+5 V pins with short thick leads; leave the HAT's SW1 on "Pi supply" so the
+HAT draws from the Pi instead of the other way round. Confirm with
+max_current / dmesg undervoltage checks. Sources: Seeed wiki product
+page (12-24 V DC input, "selectable" supply, no current figure), industrial
+datasheet 103990563 (same), schematic PDF (parts above).
